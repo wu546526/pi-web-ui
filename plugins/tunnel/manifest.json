@@ -1,0 +1,37 @@
+{
+	"id": "tunnel",
+	"name": "网络隧道",
+	"nameEn": "pi-tunnel",
+	"version": "1.0.0",
+	"icon": "🔗",
+	"iconSvg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71\"/><path d=\"M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71\"/></svg>",
+	"description": "反向隧道：主人设备 CLI 主动连入（零公网暴露，穿 NAT），pi 经本机 SOCKS5 以主人所在网络为出口做巡检与访问（DNS 在主人侧解析）。面板展示隧道在线状态/连接数/令牌管理；注册 tunnel_fetch 工具供 AI 直接探测主人网络。",
+	"descriptionEn": "Reverse tunnel: the owner's device dials in (no public exposure, NAT-friendly); pi reaches the owner's network via local SOCKS5 with DNS resolved owner-side. Panel shows tunnel status/connections/token; tunnel_fetch tool for AI probes.",
+	"apiVersion": 2,
+	"permissions": ["ui", "tools", "http"],
+	"view": true,
+	"settings": [
+		{
+			"key": "wsPort",
+			"type": "number",
+			"label": "WS 隧道端口（全网卡，主人设备连入）",
+			"labelEn": "WS tunnel port (all interfaces)",
+			"default": 8765,
+			"min": 1024,
+			"max": 65535,
+			"hint": "鉴权 token 在插件 storage 中，改端口后主人设备 CLI 需带新地址重连",
+			"hintEn": "Auth token lives in plugin storage; changing the port requires CLI reconnect with new address"
+		},
+		{
+			"key": "socksPort",
+			"type": "number",
+			"label": "SOCKS5 端口（仅监听 127.0.0.1）",
+			"labelEn": "SOCKS5 port (127.0.0.1 only)",
+			"default": 1080,
+			"min": 1024,
+			"max": 65535,
+			"hint": "AI 经此端口发起探测：curl --socks5-hostname 127.0.0.1:<port> <url>",
+			"hintEn": "AI probes via: curl --socks5-hostname 127.0.0.1:<port> <url>"
+		}
+	]
+}
