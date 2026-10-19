@@ -50,6 +50,21 @@ const CSS = `
 /* ─ 合并卡内小节标题 ─ */
 .tnl-sec { font-weight: 700; margin: 2px 0 6px; }
 .tnl-sep { border: none; border-top: 1px dashed var(--border-soft, #8883); margin: 12px 0; }
+/* ─ P5 视觉梳理：仪表卡 kv 对齐 / 设备行版本徽章与离线弱化 / 按钮组分隔 / 任务结果徽章 / 键盘焦点 ─ */
+.tnl-kv { display: flex; align-items: center; gap: 8px; }
+.tnl-ver { font-size: 11px; font-family: var(--mono, ui-monospace, Menlo, monospace); color: var(--text-dim, #999); background: var(--bg-elev2, #8881); border: 1px solid var(--border-soft, #8883); border-radius: 4px; padding: 0 6px; line-height: 1.6; }
+.tnl-dev.off { opacity: .55; }
+.tnl-btnrow-sep { width: 1px; height: 16px; background: var(--border-soft, #8883); margin: 0 4px; flex: none; }
+.tnl-btn:focus-visible { outline: 2px solid var(--accent, #4a7dff); outline-offset: 1px; }
+.tnl-tk-meta { display: flex; align-items: center; gap: 8px; margin: 0 14px 6px; }
+.tnl-tk-meta .tnl-cur { font-size: 11px; }
+.tnl-tk-meta .tnl-dim { font-size: 11px; }
+/* ─ 审计行 grid 对齐（时间固定宽 + 设备固定宽 + op/detail 流式） ─ */
+.tnl-audit .tnl-al { display: flex; align-items: baseline; gap: 8px; padding: 1px 0; }
+.tnl-audit .tnl-al .tnl-at { flex: none; min-width: 66px; font-variant-numeric: tabular-nums; }
+.tnl-audit .tnl-al .tnl-token { flex: none; min-width: 118px; max-width: 118px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.tnl-audit .tnl-al .tnl-op { flex: none; font-family: var(--mono, ui-monospace, Menlo, monospace); font-size: 11px; }
+.tnl-audit .tnl-al .tnl-dim { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* ─ 目录选择器 modal ─ */
 .tnl-bm { position: fixed; inset: 0; background: #0009; backdrop-filter: blur(2px); display: flex; align-items: center; justify-content: center; z-index: 999; }
 .tnl-bm-card { width: 440px; max-height: 72vh; display: flex; flex-direction: column; background: var(--bg-elev, #1e1e1e); color: var(--text, #eee); border: 1px solid var(--border, #8884); border-radius: 12px; padding: 0; box-shadow: 0 12px 48px #000a; overflow: hidden; }
@@ -146,7 +161,7 @@ export default defineView({
 			'<div class="tnl-row"><span class="tnl-dot" id="tnl-dot"></span><span class="tnl-state" id="tnl-state">读取中…</span>',
 			'<button class="tnl-btn danger" id="tnl-toggle" style="margin-left:auto">停止服务</button></div>',
 			'<div class="tnl-row" style="margin-top:10px"><span class="tnl-label">连接数</span><span id="tnl-conns">—</span>',
-			'<span class="tnl-label" style="margin-left:18px">端口</span><span class="tnl-mono" id="tnl-ports">—</span></div>',
+			'<span class="tnl-kv" style="margin-left:18px"><span class="tnl-label">端口</span><span class="tnl-mono" id="tnl-ports">—</span></span></div>',
 			'</div>',
 			// 出口设备
 			'<div class="tnl-card">',
@@ -204,7 +219,8 @@ export default defineView({
 			'<textarea id="tnl-tk-prompt" placeholder="任务描述（如：列出 Downloads 下大于 100MB 的文件）" style="margin:10px 14px 6px;width:calc(100% - 28px);height:64px;background:var(--bg-elev2,#8881);color:var(--text,inherit);border:1px solid var(--border,#8884);border-radius:8px;padding:8px;font-size:12.5px;resize:vertical"></textarea>',
 			'<div class="tnl-row" style="margin:0 14px"><label style="font-size:12px;color:var(--text-dim,#999)"><input type="checkbox" id="tnl-tk-full"> 允许写入/执行（bash/edit/write，默认只读）</label>',
 			'<button class="tnl-btn primary sm" id="tnl-tk-run" style="margin-left:auto">执行任务</button></div>',
-			'<pre id="tnl-tk-out" class="tnl-bm-path" style="margin:10px 14px;max-height:260px;overflow-y:auto;white-space:pre-wrap;font-size:11.5px;line-height:1.7">（结果将显示在这里）</pre>',
+			'<div class="tnl-tk-meta" id="tnl-tk-meta" style="display:none"></div>',
+			'<pre id="tnl-tk-out" class="tnl-bm-path" style="margin:0 14px 14px;max-height:260px;overflow-y:auto;white-space:pre-wrap;font-size:11.5px;line-height:1.7">（结果将显示在这里）</pre>',
 			'</div>',
 			'</div>',
 			'</div>',
@@ -324,7 +340,7 @@ export default defineView({
 				try {
 					const r = await fetch('/plugins-api/tunnel/device/task', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, prompt, tools: full ? 'read,grep,glob,bash,edit,write' : 'read,grep,glob' }) });
 					const d = await r.json();
-					if (d.error) { $('#tnl-tk-out').textContent = '✗ ' + d.error; }
+					if (d.error) { $('#tnl-tk-meta').style.display = 'none'; $('#tnl-tk-out').textContent = '✗ ' + d.error; }
 					else {
 						// pi --mode json 输出 NDJSON 事件流：提取最后的 assistant 文本，回退原样
 						let text = '';
@@ -339,7 +355,10 @@ export default defineView({
 								}
 							}
 						} catch {}
-						$('#tnl-tk-out').textContent = (text || String(d.output || '').slice(-3000) || '（无输出）') + `\n\n— 耗时 ${Math.round((d.ms || 0) / 1000)}s`;
+						const secs = Math.round((d.ms || 0) / 1000);
+						$('#tnl-tk-meta').style.display = 'flex';
+						$('#tnl-tk-meta').innerHTML = '<span class="tnl-cur">✓ 完成</span><span class="tnl-dim">设备端 pi agent · 耗时 ' + secs + 's</span>';
+						$('#tnl-tk-out').textContent = (text || String(d.output || '').slice(-3000) || '（无输出）');
 					}
 				} catch { $('#tnl-tk-out').textContent = '✗ 请求失败'; }
 				$('#tnl-tk-run').disabled = false;
@@ -368,7 +387,7 @@ export default defineView({
 				const d = await r.json();
 				const items = d.items ?? [];
 				$('#tnl-audit').innerHTML = items.length
-					? items.map(it => '<span class="tnl-at">' + new Date(it.ts).toLocaleTimeString() + '</span>  <span class="tnl-token">' + esc(it.device) + '</span> ' + esc(it.op) + (it.detail ? '  <span class="tnl-dim">' + esc(String(it.detail).slice(0, 80)) + '</span>' : '')).join('<br>')
+					? items.map(it => '<div class="tnl-al"><span class="tnl-at">' + new Date(it.ts).toLocaleTimeString() + '</span><span class="tnl-token">' + esc(it.device) + '</span><span class="tnl-op">' + esc(it.op) + '</span>' + (it.detail ? '<span class="tnl-dim">' + esc(String(it.detail).slice(0, 80)) + '</span>' : '') + '</div>').join('')
 					: '暂无操作记录';
 			} catch { /* 审计拉取失败静默 */ }
 		}
@@ -386,6 +405,7 @@ export default defineView({
 				const dot = '<span class="tnl-dot ' + (x.online ? 'ok' : '') + '"></span>';
 				const nm = '<span class="tnl-name">' + esc(x.name) + '</span>';
 				const osf = '<span class="tnl-os">' + esc(x.os || '—') + '</span>';
+				const ver = x.ver ? '<span class="tnl-ver">v ' + esc(x.ver) + '</span>' : '';
 				const stale = x.online && !x.ver ? '<span class="tnl-os" style="color:var(--red-text,var(--red,#d33))">CLI 需更新</span>' : '';
 				let tag;
 				if (x.id === d.activeAgentId) tag = '<span class="tnl-cur">当前出口</span>';
@@ -401,12 +421,13 @@ export default defineView({
 					'<button class="tnl-btn sm tnl-cfg-task" data-id="' + esc(x.id) + '">任务</button>',
 					'<button class="tnl-btn sm tnl-cfg-hw" data-id="' + esc(x.id) + '">硬件</button>',
 					'<button class="tnl-btn sm tnl-cfg-browse" data-id="' + esc(x.id) + '">浏览…</button>',
+					'<span class="tnl-btnrow-sep"></span>',
 					'<button class="tnl-btn sm primary tnl-cfg-save" data-id="' + esc(x.id) + '">保存配置</button>',
 					'<button class="tnl-btn sm danger tnl-cfg-uninst" data-id="' + esc(x.id) + '">卸载</button>',
 					'</span>',
 					'</div>',
 				].join('') : '';
-				return '<div class="tnl-dev">' + dot + nm + osf + stale + tag + '</div>' + cfgRow;
+				return '<div class="tnl-dev' + (x.online ? '' : ' off') + '">' + dot + nm + osf + ver + stale + tag + '</div>' + cfgRow;
 			}).join('');
 		}
 
