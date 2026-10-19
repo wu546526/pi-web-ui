@@ -371,5 +371,25 @@
 		"descriptionEn": "Multi-engine TTS plugin aggregating Doubao and DeepSeek official voices, supporting one-click browser credential sync, message narration, and real-time streaming speech playback.",
 		"source": "xing-shuyin/pi-web-ui/plugins/tts",
 		"homepage": "https://github.com/xing-shuyin/pi-web-ui/tree/main/plugins/tts"
+	},
+	{
+		"id": "tunnel",
+		"name": "网络隧道",
+		"icon": "🔗",
+		"iconSvg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71\"/><path d=\"M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71\"/></svg>",
+		"description": "反向隧道：主人设备 CLI 主动连入（零公网暴露，穿 NAT），pi 经本机 SOCKS5 以主人所在网络为出口做巡检与访问（DNS 在主人侧解析）。面板展示隧道在线状态/连接数/令牌管理；注册 tunnel_fetch 工具供 AI 直接探测主人网络。",
+		"descriptionEn": "Reverse tunnel: the owner's device dials in (no public exposure, NAT-friendly); pi reaches the owner's network via local SOCKS5 with DNS resolved owner-side. Panel shows tunnel status/connections/token; tunnel_fetch tool for AI probes.",
+		"source": "xing-shuyin/pi-web-ui/plugins/tunnel",
+		"homepage": "https://github.com/xing-shuyin/pi-web-ui/tree/main/plugins/tunnel"
+	},
+	{
+		"id": "approval-gate",
+		"name": "拍板",
+		"icon": "🪧",
+		"iconSvg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M22 5H2v11h20z\"/><path d=\"M12 16v4\"/><path d=\"M8 20h8\"/><path d=\"M7 9l3 3 5-5\"/></svg>",
+		"description": "定时任务拍板中心：待拍板项集中列表，点击跳转对应会话完成拍板；通用 CLI 供任意定时任务登记；顶栏拍板 tab 红点显示待拍板数。",
+		"descriptionEn": "Approval gate: centralized pending-decision list from scheduled tasks; click an item to jump into its conversation; red-dot badge on the tab shows pending count. A generic CLI lets any cron job register items.",
+		"source": "xing-shuyin/pi-web-ui/plugins/approval-gate",
+		"homepage": "https://github.com/xing-shuyin/pi-web-ui/tree/main/plugins/approval-gate"
 	}
 ]
