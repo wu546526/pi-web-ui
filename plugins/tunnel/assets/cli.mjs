@@ -240,7 +240,7 @@ const ctrlSrv = http.createServer((req, res) => {
         const cmd = isJs ? process.execPath : piPath;
         const runArgs = isJs ? [piPath, ...args] : args;
         const t0 = Date.now();
-        // execFile 与 pi 不兼容（20261019 A-F 组实测：execFile 稳定挂死、spawn 正常）——改 spawn + 手动超时收割
+        // execFile 会丢弃 stdio 选项（internal exec 不透传）→ stdin 强制 pipe 永不 EOF → pi 等 stdin 输入结束而挂死（L 组 stdin.end() 实锤 3s 通）——改 spawn + ignore 立即 EOF + 手动超时
         const child = spawn(cmd, runArgs, { env: spawnEnv, cwd: homedir(), stdio: ['ignore', 'pipe', 'pipe'] }); // cwd 固定主目录：launchd 下默认 / 会导致 pi 产物落点失控
         let outBuf = '', errBuf = '';
         child.stdout.on('data', d => { outBuf += d; if (outBuf.length > 2e6) outBuf = outBuf.slice(-1e6); });
