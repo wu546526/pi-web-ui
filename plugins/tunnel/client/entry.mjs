@@ -72,14 +72,16 @@ function persistCmd(os) {
 	if (os === 'Windows') {
 		return [
 			'curl.exe -o $env:USERPROFILE\\pi-tunnel-cli.mjs http://' + host + ':' + port + '/cli',
+			'npm i -g @earendil-works/pi-coding-agent',
 			'schtasks /create /tn "pi-tunnel" /tr "node $env:USERPROFILE\\pi-tunnel-cli.mjs" /sc onlogon /f',
 			'schtasks /run /tn "pi-tunnel"',
-			'echo 常驻已装：登录自启，CLI 内置 5s 掉线重连',
+			'echo 常驻已装：登录自启，CLI 内置 5s 掉线重连；pi agent 已就绪（首次用需 pi auth 配模型）',
 		].join('\n');
 	}
 	if (os === 'Linux') {
 		return [
 			'curl -o ~/pi-tunnel-cli.mjs http://' + host + ':' + port + '/cli',
+			'npm i -g @earendil-works/pi-coding-agent',
 			'mkdir -p ~/.config/systemd/user',
 			'cat > ~/.config/systemd/user/pi-tunnel.service <<UNIT',
 			'[Unit]',
@@ -97,10 +99,11 @@ function persistCmd(os) {
 		].join('\n');
 	}
 	// macOS（默认）
-	return [
-		'curl -o ~/pi-tunnel-cli.mjs http://' + host + ':' + port + '/cli',
-		'NODE_BIN=$(command -v node)',
-		'mkdir -p ~/Library/LaunchAgents',
+		return [
+			'curl -o ~/pi-tunnel-cli.mjs http://' + host + ':' + port + '/cli',
+			'NODE_BIN=$(command -v node)',
+			'npm i -g @earendil-works/pi-coding-agent',
+			'mkdir -p ~/Library/LaunchAgents',
 		'launchctl bootout gui/$(id -u)/com.pi-tunnel.cli 2>/dev/null',
 		'cat > ~/Library/LaunchAgents/com.pi-tunnel.cli.plist <<PLIST',
 		'<?xml version="1.0" encoding="UTF-8"?>',
@@ -192,6 +195,16 @@ export default defineView({
 			'<pre id="tnl-hw-body" class="tnl-bm-path" style="margin:14px;white-space:pre-wrap;font-size:12.5px;line-height:1.9">加载中…</pre>',
 			'</div>',
 			'</div>',
+			// P4-B: pi agent 任务 modal（默认隐藏）
+			'<div class="tnl-bm" id="tnl-tk" style="display:none">',
+			'<div class="tnl-bm-card" style="width:520px">',
+			'<div class="tnl-bm-head"><b>指挥设备 pi agent</b><button class="tnl-btn sm" id="tnl-tk-x">关闭</button></div>',
+			'<textarea id="tnl-tk-prompt" placeholder="任务描述（如：列出 Downloads 下大于 100MB 的文件）" style="margin:10px 14px 6px;width:calc(100% - 28px);height:64px;background:var(--bg-elev2,#8881);color:var(--text,inherit);border:1px solid var(--border,#8884);border-radius:8px;padding:8px;font-size:12.5px;resize:vertical"></textarea>',
+			'<div class="tnl-row" style="margin:0 14px"><label style="font-size:12px;color:var(--text-dim,#999)"><input type="checkbox" id="tnl-tk-full"> 允许写入/执行（bash/edit/write，默认只读）</label>',
+			'<button class="tnl-btn primary sm" id="tnl-tk-run" style="margin-left:auto">执行任务</button></div>',
+			'<pre id="tnl-tk-out" class="tnl-bm-path" style="margin:10px 14px;max-height:260px;overflow-y:auto;white-space:pre-wrap;font-size:11.5px;line-height:1.7">（结果将显示在这里）</pre>',
+			'</div>',
+			'</div>',
 			'</div>',
 		].join('\n');
 		el.insertAdjacentHTML('beforeend', H);
@@ -232,6 +245,11 @@ export default defineView({
 			}
 			if (b.classList.contains('tnl-cfg-hw')) { // P4+: 打开硬件概览
 				openHw(b.dataset.id);
+				return;
+			}
+			if (b.classList.contains('tnl-cfg-task')) { // P4-B: 打开任务面板
+				$('#tnl-tk').style.display = 'flex';
+				$('#tnl-tk-prompt').dataset.id = b.dataset.id;
 				return;
 			}
 			try { await fetch('/plugins-api/tunnel/agent/select', { method: 'POST', body: JSON.stringify({ id: b.dataset.id }) }); } catch {}
@@ -291,6 +309,39 @@ export default defineView({
 			}
 			$('#tnl-hw-x').onclick = () => { $('#tnl-hw').style.display = 'none'; };
 			$('#tnl-hw').addEventListener('click', e => { if (e.target.id === 'tnl-hw') $('#tnl-hw').style.display = 'none'; });
+			// ── P4-B: 任务面板 ─────────
+			$('#tnl-tk-x').onclick = () => { $('#tnl-tk').style.display = 'none'; };
+			$('#tnl-tk').addEventListener('click', e => { if (e.target.id === 'tnl-tk') $('#tnl-tk').style.display = 'none'; });
+			$('#tnl-tk-run').onclick = async () => {
+				const id = $('#tnl-tk-prompt').dataset.id;
+				const prompt = $('#tnl-tk-prompt').value.trim();
+				if (!id || !prompt) { $('#tnl-tk-out').textContent = '请先填写任务描述'; return; }
+				const full = $('#tnl-tk-full').checked;
+				$('#tnl-tk-run').disabled = true;
+				$('#tnl-tk-out').textContent = '任务执行中（设备端 pi agent，最长 5 分钟）…';
+				try {
+					const r = await fetch('/plugins-api/tunnel/device/task', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, prompt, tools: full ? 'read,grep,glob,bash,edit,write' : 'read,grep,glob' }) });
+					const d = await r.json();
+					if (d.error) { $('#tnl-tk-out').textContent = '✗ ' + d.error; }
+					else {
+						// pi --mode json 输出 NDJSON 事件流：提取最后的 assistant 文本，回退原样
+						let text = '';
+						try {
+							for (const line of String(d.output || '').split('\n')) {
+								if (!line.trim()) continue;
+								const ev = JSON.parse(line);
+								const msg = ev.message ?? ev;
+								if ((msg.role === 'assistant' || ev.type === 'message_end') && msg.content) {
+									const c = Array.isArray(msg.content) ? msg.content.map(p => p.text || '').join('') : String(msg.content);
+									if (c.trim()) text = c;
+								}
+							}
+						} catch {}
+						$('#tnl-tk-out').textContent = (text || String(d.output || '').slice(-3000) || '（无输出）') + `\n\n— 耗时 ${Math.round((d.ms || 0) / 1000)}s`;
+					}
+				} catch { $('#tnl-tk-out').textContent = '✗ 请求失败'; }
+				$('#tnl-tk-run').disabled = false;
+			};
 			$('#tnl-bm-x').onclick = () => { $('#tnl-bm').style.display = 'none'; };
 			$('#tnl-bm').addEventListener('click', e => { if (e.target.id === 'tnl-bm') $('#tnl-bm').style.display = 'none'; });
 			$('#tnl-bm-list').addEventListener('click', e => {
@@ -345,6 +396,7 @@ export default defineView({
 					'<label><input type="checkbox" class="tnl-cfg-fsw" ' + (caps.fsWrite ? 'checked' : '') + '> 文件写</label>',
 					'<input class="tnl-wl" value="' + esc((caps.whitelist ?? []).join(', ')) + '" placeholder="白名单目录（逗号分隔）">',
 					'<span class="tnl-btnrow">',
+					'<button class="tnl-btn sm tnl-cfg-task" data-id="' + esc(x.id) + '">任务</button>',
 					'<button class="tnl-btn sm tnl-cfg-hw" data-id="' + esc(x.id) + '">硬件</button>',
 					'<button class="tnl-btn sm tnl-cfg-browse" data-id="' + esc(x.id) + '">浏览…</button>',
 					'<button class="tnl-btn sm primary tnl-cfg-save" data-id="' + esc(x.id) + '">保存配置</button>',

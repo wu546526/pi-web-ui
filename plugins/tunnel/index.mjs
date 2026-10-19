@@ -103,15 +103,42 @@ export default {
 			req.on('error', () => resolve({}));
 		});
 		// 面板经 server 中转到设备控制 API（复用 CLI 本机鉴权/审计，不走 SOCKS 开销）
-		const deviceCtrl = (aid, url, timeoutMs = 8000) => new Promise(resolve => {
+		const deviceCtrl = (aid, url, opts = {}, timeoutMs = 8000) => new Promise(resolve => {
 			const ag = agentById(aid);
 			if (!ag) return resolve({ status: 503, body: { error: '设备不在线' } });
 			if (!ag.ver) return resolve({ status: 400, body: { error: '该设备 CLI 为旧版，不支持此操作——请在面板「设备常驻化」重新安装后重试' } });
 			const rid = `r${++ctrlSeq}`;
 			const timer = setTimeout(() => { state.ctrlPending.delete(rid); resolve({ status: 504, body: { error: '设备响应超时' } }); }, timeoutMs);
 			state.ctrlPending.set(rid, { resolve: v => { clearTimeout(timer); resolve(v); } });
-			toAgent(aid, { t: 'ctrl', rid, url });
+			toAgent(aid, { t: 'ctrl', rid, url, method: opts.method || 'GET', body: opts.body });
 		});
+		// 模型三元组跟随：设备 pi 用 pi-web-ui 当前会话模型（wildwork 网关）；解析失败返回 null，由面板手动兑底
+		const resolveModelEnv = () => {
+			try {
+				const manual = host.storage.get('modelEnv');
+				if (manual) {
+					const j = JSON.parse(manual);
+					if (j.baseUrl && j.apiKey && j.model) return { env: { OPENAI_BASE_URL: j.baseUrl, OPENAI_API_KEY: j.apiKey }, model: j.model };
+				}
+			} catch {}
+			try {
+				const home = os.homedir();
+				const cs = JSON.parse(fs.readFileSync(path.join(home, '.pi-web/client-state.json'), 'utf8'));
+				const m = JSON.stringify(cs).match(/"((?:wildwork|minimax-cn|ark|deepseek)\/[^"\\]+)"/); // 当前会话模型 ID（provider/渠道/型号）
+				if (!m) return null;
+				const full = m[1];
+				const prov = full.split('/')[0];
+				const gwModel = full.split('/').slice(1).join('/'); // 剥 provider 前缀 = 网关侧 ID
+				const keys = JSON.parse(fs.readFileSync(path.join(home, '.pi/agent/provider-keys.json'), 'utf8'));
+				const apiKey = keys?.[prov]?.keys?.[0];
+				if (!apiKey) return null;
+				let base = '';
+				if (prov === 'wildwork') base = lanIp ? `http://${lanIp}:${process.env.WILDWORK_GW_PORT || '7863'}/v1` : '';
+				else return { env: {}, model: full }; // 标准 provider：设备端需已 pi auth，只传模型 ID
+				if (!base) return null;
+				return { env: { OPENAI_BASE_URL: base, OPENAI_API_KEY: apiKey }, model: gwModel };
+			} catch { return null; }
+		};
 		// C 档 P1：审计环 + 设备能力配置（按 name 持久化，重连不丢授权）
 		const auditRing = [];
 		let devCfg = {};
@@ -436,6 +463,21 @@ export default {
 					const j = await readBodyJson(req);
 					const id = String(j.id ?? '');
 					const d = id ? await deviceCtrl(id, '/sys/hw') : { status: 400, body: { error: '缺少设备 id' } };
+					res.setHeader('content-type', 'application/json');
+					res.end(JSON.stringify(d.body));
+				}
+			});
+			const offTask = host.route('POST', '/device/task', async (req, res) => { // P4-B: 通用任务通道（指挥设备 pi agent）
+				{
+					const j = await readBodyJson(req);
+					const id = String(j.id ?? '');
+					const me = resolveModelEnv();
+					if (!me) {
+						res.setHeader('content-type', 'application/json');
+						return res.end(JSON.stringify({ error: '模型通道无法解析（未找到当前会话模型或网关 key）——可在面板设置手动配置 modelEnv' }));
+					}
+					const payload = JSON.stringify({ prompt: String(j.prompt ?? ''), tools: String(j.tools || 'read,grep,glob'), env: me.env, model: me.model, timeoutS: +j.timeoutS || 300 });
+					const d = id ? await deviceCtrl(id, '/task', { method: 'POST', body: payload }, (+j.timeoutS || 300) * 1000 + 30000) : { status: 400, body: { error: '缺少设备 id' } };
 					res.setHeader('content-type', 'application/json');
 					res.end(JSON.stringify(d.body));
 				}

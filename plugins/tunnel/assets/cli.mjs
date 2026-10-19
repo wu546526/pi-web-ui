@@ -16,8 +16,10 @@ const argSrv = process.argv.slice(2).find(a => /^wss?:\/\//.test(a)); // 只认 
 const SERVER = argSrv || '{{SERVER}}';
 const TOKEN  = process.env.PI_TUNNEL_TOKEN || '{{TOKEN}}';
 const sockMap = new Map();
-const CLI_VER = 'p5'; // 能力版本：server 据此识别旧版 CLI（无 ver 字段）并快速提示升级
+const CLI_VER = 'p6'; // 能力版本：server 据此识别旧版 CLI（无 ver 字段）并快速提示升级
 const CFG_FILE = path.join(homedir(), '.pi-tunnel-cli.json');
+let piPath = ''; // pi agent 可执行路径（启动时探测；未装则 /task 提示安装）
+let taskBusy = false; // 设备端任务串行锁
 
 if (typeof WebSocket === 'undefined') {
   console.error(`需要 Node >= 22 (全局 WebSocket)。当前 ${process.version}`);
@@ -190,6 +192,39 @@ const ctrlSrv = http.createServer((req, res) => {
       })();
       return;
     }
+    if (u.pathname === '/task' && req.method === 'POST') { // 通用任务通道：转发给设备上的 pi agent（能力随 pi，不再发版）
+      let body = '';
+      req.on('data', c => { body += c; });
+      req.on('end', () => {
+        let prompt = '', tools = 'read,grep,glob', env = {}, timeoutS = 300, model = '';
+        try {
+          const j = JSON.parse(body || '{}');
+          prompt = String(j.prompt ?? '').slice(0, 4000);
+          tools = String(j.tools ?? 'read,grep,glob');
+          env = j.env && typeof j.env === 'object' ? j.env : {};
+          timeoutS = Math.min(Math.max(+j.timeoutS || 300, 30), 900);
+          model = String(j.model ?? '');
+        } catch {}
+        if (!prompt.trim()) return json(res, 400, { error: 'prompt 为空' });
+        if (!/^[a-z_,*+.-]+$/i.test(tools)) return json(res, 400, { error: 'tools 非法' });
+        if (!piPath) return json(res, 400, { error: '设备未安装 pi agent（更新常驻命令以安装）' });
+        if (taskBusy) return json(res, 429, { error: '已有任务在执行（设备端串行）' });
+        const allowEnv = {};
+        for (const k of ['OPENAI_BASE_URL', 'OPENAI_API_KEY', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN']) {
+          if (typeof env[k] === 'string' && env[k]) allowEnv[k] = env[k];
+        }
+        audit('task.run', `${tools} | ${prompt.slice(0, 60)}`);
+        taskBusy = true;
+        const args = ['-p', prompt, '--mode', 'json', '--no-session', '--tools', tools];
+        if (model) args.push('--model', model);
+        const t0 = Date.now();
+        execFile(piPath, args, { timeout: timeoutS * 1000, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, ...allowEnv } }, (e, so, se) => {
+          taskBusy = false;
+          json(res, e && !so ? 500 : 200, { ok: !e || !!so, ms: Date.now() - t0, output: String(so || '').slice(-40000), err: String(se || '').slice(-500) });
+        });
+      });
+      return;
+    }
     if (u.pathname === '/devices') {
       audit('devices.enum', os.platform());
       return listDevices((err, d) => json(res, err ? 500 : 200, err ? { error: err } : d));
@@ -236,13 +271,17 @@ function connect() {
       console.log(`[tunnel] 配置已更新: fsRead=${cfg.fsRead} fsWrite=${cfg.fsWrite} 白名单=${cfg.whitelist.length} 项`);
       try { ws.send(JSON.stringify({ t: 'hello', name: process.env.PI_TUNNEL_NAME || os.hostname(), os: `${os.platform()} ${os.release()} ${os.arch()}`, ctrlPort, ver: CLI_VER })); } catch {}
     }
-    else if (m.t === 'ctrl') { // 面板经 server 转发的控制请求：自连本机 ctrlSrv，复用全部鉴权/审计
-      const rq = http.get({ host: '127.0.0.1', port: ctrlPort, path: m.url, headers: { 'X-Tunnel-Token': TOKEN } }, r => {
+    else if (m.t === 'ctrl') { // 面板经 server 转发的控制请求：自连本机 ctrlSrv，复用全部鉴权/审计（支持 POST body）
+      const reqOpts = { host: '127.0.0.1', port: ctrlPort, path: m.url, method: m.method || 'GET', headers: { 'X-Tunnel-Token': TOKEN } };
+      if (m.body) { reqOpts.headers['content-type'] = 'application/json'; reqOpts.headers['content-length'] = Buffer.byteLength(m.body); }
+      const rq = http.request(reqOpts, r => {
         let body = '';
         r.on('data', d => body += d);
         r.on('end', () => { try { ws.send(JSON.stringify({ t: 'ctrl-resp', rid: m.rid, status: r.statusCode, body: JSON.parse(body) })); } catch {} });
       });
       rq.on('error', () => { try { ws.send(JSON.stringify({ t: 'ctrl-resp', rid: m.rid, status: 500, body: { error: 'ctrl unreachable' } })); } catch {} });
+      if (m.body) rq.write(m.body);
+      rq.end();
     }
     else if (m.t === 'uninstall') { // 面板下发：自卸载（停常驻→删配置与 CLI 文件→退出）
       audit('cli.uninstall', os.platform());
@@ -291,9 +330,25 @@ setInterval(() => {
   }
 }, 5000);
 
-// 先起控制服务，再连隧道（hello 需要 ctrlPort）
-ctrlSrv.listen(0, '127.0.0.1', () => {
-  ctrlPort = ctrlSrv.address().port;
-  console.log(`[ctrl] 控制API监听 127.0.0.1:${ctrlPort}（fsRead=${cfg.fsRead} fsWrite=${cfg.fsWrite} 白名单=${cfg.whitelist.length}）`);
-  connect();
-});
+// 先起控制服务，再连隧道（hello 需要 ctrlPort）；顺便探测 pi agent 路径
+(async () => {
+  const tryRun = (cmd, args) => new Promise(r => execFile(cmd, args, { timeout: 5000 }, (e, so) => r(e ? '' : String(so).trim())));
+  try {
+    let p = await tryRun('which', ['pi']);
+    if (!p && process.platform === 'win32') p = (await tryRun('where', ['pi'])).split('\n')[0].trim();
+    if (!p && process.platform !== 'win32') {
+      const prefix = await tryRun('npm', ['prefix', '-g']);
+      if (prefix) {
+        const cand = prefix + '/bin/pi';
+        try { fs.accessSync(cand, fs.constants.X_OK); p = cand; } catch {}
+      }
+    }
+    piPath = p || '';
+  } catch { piPath = ''; }
+  if (piPath) console.log(`[pi] agent 就绪: ${piPath}`);
+  ctrlSrv.listen(0, '127.0.0.1', () => {
+    ctrlPort = ctrlSrv.address().port;
+    console.log(`[ctrl] 控制API监听 127.0.0.1:${ctrlPort}（fsRead=${cfg.fsRead} fsWrite=${cfg.fsWrite} 白名单=${cfg.whitelist.length}）`);
+    connect();
+  });
+})();
