@@ -238,7 +238,7 @@ const ctrlSrv = http.createServer((req, res) => {
         const cmd = isJs ? process.execPath : piPath;
         const runArgs = isJs ? [piPath, ...args] : args;
         const t0 = Date.now();
-        execFile(cmd, runArgs, { timeout: timeoutS * 1000, maxBuffer: 4 * 1024 * 1024, env: spawnEnv }, (e, so, se) => {
+        execFile(cmd, runArgs, { timeout: timeoutS * 1000, maxBuffer: 4 * 1024 * 1024, env: spawnEnv, cwd: homedir() }, (e, so, se) => { // cwd 固定主目录：launchd 下默认 / 会导致 pi 产物落点失控
           taskBusy = false;
           json(res, e && !so ? 500 : 200, { ok: !e || !!so, ms: Date.now() - t0, output: String(so || '').slice(-40000), err: String(se || '').slice(-500) });
         });
