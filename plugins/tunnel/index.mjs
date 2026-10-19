@@ -217,6 +217,7 @@ export default {
 						case 'data': if (e) e.c.write(Buffer.from(m.b64, 'base64')); break;
 						case 'end': if (e) e.c.end(); break;
 						case 'err':
+							if (e) auditRing.push({ ts: Date.now(), device: state.agents.get(aid)?.name || aid, op: 'socks.connect.fail', detail: String(m.msg || '').slice(0, 200) + ' → ' + (e.lastTarget ?? '') });
 							if (e && !e.replied) { e.replied = true; socksReply(e.c, 5); }
 							if (e) e.c.destroy();
 							break;
