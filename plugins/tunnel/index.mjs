@@ -122,6 +122,7 @@ export default {
 		const lanIp = detectLanIp(); // 面板生成常驻命令用（网络变化随插件重载自动更新）
 		const statusSnapshot = () => ({
 			running,
+			rev: 'c1-p1', // 代码版本标记：reload 后可观测新代码是否激活
 			lanIp,
 			agentOnline: !!activeAgent(), // 兼容旧面板语义：当前出口在线
 			activeAgentId: state.activeAgentId,
@@ -256,6 +257,7 @@ export default {
 				const req = parseSocksConnect(buf);
 				if (!req) { socksReply(c, 7); return c.destroy(); }
 				const ag = activeAgent();
+				console.log(`[tunnel] SOCKS CONNECT ${req.host}:${req.port} active=${state.activeAgentId} agentReady=${ag ? 1 : 0} agents=${state.agents.size}`);
 				if (!ag) { socksReply(c, 5); return c.destroy(); } // 无在线设备：拒绝，AI 侧表现为快速失败
 				const aid = state.activeAgentId;
 				const cid = `c${state.nextId++}`;
