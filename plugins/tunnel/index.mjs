@@ -131,7 +131,7 @@ export default {
 			let code = fs.readFileSync(path.join(__dirname, 'assets', 'cli.mjs'), 'utf8');
 			return code
 				.replaceAll('{{TOKEN}}', token)
-				.replaceAll('{{SERVER}}', `ws://${req?.headers?.host || `172.16.120.11:${wsPort}`}`);
+				.replaceAll('{{SERVER}}', `ws://${req?.headers?.host || `${lanIp || '127.0.0.1'}:${wsPort}`}`);
 		};
 		const notifyDebounced = (level, text) => {
 			const now = Date.now();
