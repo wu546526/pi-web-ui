@@ -30,7 +30,7 @@ cfg.whitelist = (cfg.whitelist || []).map(p => p.startsWith('~') ? path.join(hom
 cfg.whitelist = [...new Set(cfg.whitelist)];
 const saveCfg = () => { try { fs.writeFileSync(CFG_FILE, JSON.stringify(cfg, null, 2)); } catch {} };
 
-const expandHome = p => p.startsWith('~/') ? path.join(homedir(), p.slice(2)) : p;
+const expandHome = p => p === '~' ? homedir() : (p.startsWith('~/') ? path.join(homedir(), p.slice(2)) : p);
 const inWhitelist = p => {
   const rp = path.resolve(p);
   return cfg.whitelist.some(w => {
