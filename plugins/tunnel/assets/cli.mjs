@@ -227,6 +227,7 @@ const ctrlSrv = http.createServer((req, res) => {
             try { const gh = new URL(allowEnv.OPENAI_BASE_URL).hostname; const np = [process.env.NO_PROXY, process.env.no_proxy, gh].filter(Boolean).join(','); spawnEnv.NO_PROXY = np; spawnEnv.no_proxy = np; } catch {}
             // 设备 pi 只需连内网网关：清掉继承的公司代理（pi 的 HTTP 客户端不完整尊重 NO_PROXY，走代理必挂，20261019 实战）
             delete spawnEnv.HTTP_PROXY; delete spawnEnv.HTTPS_PROXY; delete spawnEnv.http_proxy; delete spawnEnv.https_proxy;
+            spawnEnv.PI_SKIP_VERSION_CHECK = '1'; // 禁启动联网版本检查（无代理环境下直连公网会被拦死在启动阶段）
             console.log('[task] models.json 已写入', agentDir, '| NO_PROXY=', spawnEnv.NO_PROXY, '| HTTP_PROXY 已清除');
           } catch (e) { console.log('[task] models.json 写失败:', e.message); }
         }
