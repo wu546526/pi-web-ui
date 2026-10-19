@@ -224,6 +224,7 @@ const ctrlSrv = http.createServer((req, res) => {
             const mj = { providers: { tunnel: { baseUrl: allowEnv.OPENAI_BASE_URL, api: 'openai-completions', apiKey: allowEnv.OPENAI_API_KEY, models: [{ id: model }] } } };
             fs.writeFileSync(path.join(agentDir, 'models.json'), JSON.stringify(mj, null, 2), { mode: 0o600 });
             spawnEnv.PI_CODING_AGENT_DIR = agentDir;
+            try { const gh = new URL(allowEnv.OPENAI_BASE_URL).hostname; const np = [process.env.NO_PROXY, process.env.no_proxy, gh].filter(Boolean).join(','); spawnEnv.NO_PROXY = np; spawnEnv.no_proxy = np; } catch {}
             console.log('[task] models.json 已写入', agentDir);
           } catch (e) { console.log('[task] models.json 写失败:', e.message); }
         }
