@@ -90,7 +90,18 @@ export default {
 			conns: new Map(),    // cid -> { c, replied, aid }
 			nextId: 1, nextAid: 1,
 			totalServed: 0, lastNotifyAt: 0,
+			ctrlPending: new Map(), // P4: rid -> { resolve }（面板→设备控制请求-响应）
 		};
+		let ctrlSeq = 0;
+		// 面板经 server 中转到设备控制 API（复用 CLI 本机鉴权/审计，不走 SOCKS 开销）
+		const deviceCtrl = (aid, url, timeoutMs = 8000) => new Promise(resolve => {
+			const ag = agentById(aid);
+			if (!ag) return resolve({ status: 503, body: { error: '设备不在线' } });
+			const rid = `r${++ctrlSeq}`;
+			const timer = setTimeout(() => { state.ctrlPending.delete(rid); resolve({ status: 504, body: { error: '设备响应超时' } }); }, timeoutMs);
+			state.ctrlPending.set(rid, { resolve: v => { clearTimeout(timer); resolve(v); } });
+			toAgent(aid, { t: 'ctrl', rid, url });
+		});
 		// C 档 P1：审计环 + 设备能力配置（按 name 持久化，重连不丢授权）
 		const auditRing = [];
 		let devCfg = {};
@@ -223,6 +234,11 @@ export default {
 							if (e) e.c.destroy();
 							break;
 						case 'close': if (e) { e.c.destroy(); state.conns.delete(m.id); } break;
+						case 'ctrl-resp': { // P4: 设备控制响应回给等待中的面板请求
+							const p = state.ctrlPending.get(m.rid);
+							if (p) { state.ctrlPending.delete(m.rid); p.resolve({ status: m.status ?? 500, body: m.body ?? {} }); }
+							break;
+						}
 					}
 				});
 				ws.on('close', () => {
@@ -385,7 +401,32 @@ export default {
 				res.end(JSON.stringify({ ok: true, name: a.name, config: next }));
 			});
 		});
-		const offAudit = host.route('GET', '/audit', (_req, res) => {
+			const offDeviceFs = host.route('POST', '/device/fs', (req, res) => { // P4: 面板浏览设备目录（选白名单路径用）
+				let body = '';
+				req.on('data', ch => { body += ch; });
+				req.on('end', async () => {
+					let id = '', p = '~';
+					try { const j = JSON.parse(body || '{}'); id = String(j.id ?? ''); p = String(j.path || '~'); } catch {}
+					const d = id ? await deviceCtrl(id, '/fs/browse?path=' + encodeURIComponent(p)) : { status: 400, body: { error: '缺少设备 id' } };
+					res.setHeader('content-type', 'application/json');
+					res.end(JSON.stringify(d.body));
+				});
+			});
+			const offUninstall = host.route('POST', '/device/uninstall', (req, res) => { // P4: 面板下发 CLI 自卸载
+				let body = '';
+				req.on('data', ch => { body += ch; });
+				req.on('end', () => {
+					let id = '';
+					try { id = String(JSON.parse(body || '{}').id ?? ''); } catch {}
+					const a = state.agents.get(id);
+					res.setHeader('content-type', 'application/json');
+					if (!a) return res.end(JSON.stringify({ ok: false, error: '设备不在线' }));
+					toAgent(id, { t: 'uninstall' });
+					try { host.notify('warning', `网络隧道：已下发卸载指令到 ${a.name || id}（停常驻+删文件）`); } catch {}
+					res.end(JSON.stringify({ ok: true }));
+				});
+			});
+			const offAudit = host.route('GET', '/audit', (_req, res) => {
 			res.setHeader('content-type', 'application/json');
 			res.end(JSON.stringify({ items: auditRing.slice(-100).reverse() }));
 		});

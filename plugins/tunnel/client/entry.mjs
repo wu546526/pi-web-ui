@@ -32,6 +32,12 @@ const CSS = `
 .tnl-cfg { display: flex; align-items: center; gap: 8px; margin: 4px 0 4px 21px; flex-wrap: wrap; font-size: 12px; }
 .tnl-cfg label { color: var(--text-dim, #999); display: flex; align-items: center; gap: 3px; }
 .tnl-wl { flex: 1; min-width: 200px; background: var(--bg-elev2, #8881); color: var(--text, inherit); border: 1px solid var(--border, #8884); border-radius: 6px; padding: 3px 8px; font-family: var(--mono, monospace); font-size: 11px; }
+.tnl-bm { position: fixed; inset: 0; background: #0008; display: flex; align-items: center; justify-content: center; z-index: 999; }
+.tnl-bm-card { width: 420px; max-height: 70vh; display: flex; flex-direction: column; background: var(--bg-elev, #1e1e1e); color: var(--text, #eee); border: 1px solid var(--border, #8884); border-radius: 10px; padding: 14px; box-shadow: 0 8px 40px #0008; }
+.tnl-bm-path { font-family: var(--mono, monospace); font-size: 12px; margin: 8px 0; color: var(--text-dim, #aaa); }
+.tnl-bm-list { flex: 1; overflow-y: auto; border: 1px solid var(--border, #8882); border-radius: 6px; min-height: 160px; }
+.tnl-bm-item { padding: 6px 10px; cursor: pointer; font-size: 13px; border-bottom: 1px solid var(--border, #8881); }
+.tnl-bm-item:hover { background: var(--bg-elev2, #8882); }
 `;
 
 let lastLanIp = ''; // 由 status 轮询填充；无内网 IP 时命令里用占位符提示替换
@@ -142,6 +148,17 @@ export default defineView({
 			'</div>',
 			'<div class="tnl-row tnl-dim">AI 侧探测： curl --socks5-hostname 127.0.0.1:1080 &lt;url&gt;</div>',
 			'</div>',
+			// P4: 目录选择器 modal（默认隐藏，浏览设备目录选白名单路径）
+			'<div class="tnl-bm" id="tnl-bm" style="display:none">',
+			'<div class="tnl-bm-card">',
+			'<div style="display:flex;justify-content:space-between;align-items:center"><b>选择白名单目录</b><button class="tnl-btn" id="tnl-bm-x">关闭</button></div>',
+			'<div class="tnl-bm-path" id="tnl-bm-path">—</div>',
+			'<div class="tnl-bm-list" id="tnl-bm-list">加载中…</div>',
+			'<div class="tnl-row" style="margin-top:10px;justify-content:flex-end">',
+			'<button class="tnl-btn primary" id="tnl-bm-pick">选择此目录</button>',
+			'</div>',
+			'</div>',
+			'</div>',
 			'</div>',
 		].join('\n');
 		el.insertAdjacentHTML('beforeend', H);
@@ -170,19 +187,69 @@ export default defineView({
 				try { await fetch('/plugins-api/tunnel/agent/config', { method: 'POST', body: JSON.stringify({ id: b.dataset.id, whitelist: wl }) }); } catch {}
 				return;
 			}
+			if (b.classList.contains('tnl-cfg-uninst')) { // P4: 卸载该设备 CLI（停常驻+删文件）
+				if (!confirm('确定卸载该设备上的隧道 CLI？\n将停止常驻服务并删除 CLI 文件，设备将从列表消失。')) return;
+				try { await fetch('/plugins-api/tunnel/device/uninstall', { method: 'POST', body: JSON.stringify({ id: b.dataset.id }) }); } catch {}
+				setTimeout(refresh, 2500);
+				return;
+			}
+			if (b.classList.contains('tnl-cfg-browse')) { // P4: 打开目录选择器
+				openBrowse(b.dataset.id);
+				return;
+			}
 			try { await fetch('/plugins-api/tunnel/agent/select', { method: 'POST', body: JSON.stringify({ id: b.dataset.id }) }); } catch {}
 			refresh();
 		});
-		$('#tnl-devs').addEventListener('change', async e => {
-			const cb = e.target.closest('input[type=checkbox]');
-			if (!cb) return;
-			const wrap = cb.closest('.tnl-cfg');
-			if (!wrap) return;
-			const patch = { id: wrap.dataset.id };
-			if (cb.classList.contains('tnl-cfg-fsr')) patch.fsRead = cb.checked;
-			if (cb.classList.contains('tnl-cfg-fsw')) patch.fsWrite = cb.checked;
-			try { await fetch('/plugins-api/tunnel/agent/config', { method: 'POST', body: JSON.stringify(patch) }); } catch {}
-		});
+			$('#tnl-devs').addEventListener('change', async e => {
+				const cb = e.target.closest('input[type=checkbox]');
+				if (!cb) return;
+				const wrap = cb.closest('.tnl-cfg');
+				if (!wrap) return;
+				const patch = { id: wrap.dataset.id };
+				if (cb.classList.contains('tnl-cfg-fsr')) patch.fsRead = cb.checked;
+				if (cb.classList.contains('tnl-cfg-fsw')) patch.fsWrite = cb.checked;
+				try { await fetch('/plugins-api/tunnel/agent/config', { method: 'POST', body: JSON.stringify(patch) }); } catch {}
+			});
+
+			// ── P4: 目录选择器（经隧道逐级浏览设备目录，选中后追加到白名单输入框） ─────────
+			let browseId = null, browseAbs = null, browseHome = '/';
+			const rel = p => browseHome && p.startsWith(browseHome) ? '~' + p.slice(browseHome.length) : p; // 绝对路径→~/显示
+			async function browseTo(p) {
+				$('#tnl-bm-list').textContent = '加载中…';
+				try {
+					const r = await fetch('/plugins-api/tunnel/device/fs', { method: 'POST', body: JSON.stringify({ id: browseId, path: p }) });
+					const d = await r.json();
+					if (d.error) { $('#tnl-bm-list').textContent = d.error; return; }
+					browseAbs = d.path; browseHome = d.home || '/';
+					$('#tnl-bm-path').textContent = rel(d.path);
+					const up = d.path !== d.parent ? ['<div class="tnl-bm-item" data-go="' + esc(d.parent) + '">📁 ..</div>'] : [];
+					$('#tnl-bm-list').innerHTML = up.concat(d.dirs.map(n =>
+						'<div class="tnl-bm-item" data-go="' + esc(d.path.replace(/\/$/, '') + '/' + n) + '">📁 ' + esc(n) + '</div>')).join('');
+					if (!d.dirs.length) $('#tnl-bm-list').innerHTML += '<div class="tnl-bm-item" style="color:var(--text-faint,#777)">无子目录</div>';
+				} catch (e) { $('#tnl-bm-list').textContent = '浏览失败'; }
+			}
+			function openBrowse(id) {
+				browseId = id; browseAbs = null;
+				$('#tnl-bm').style.display = 'flex';
+				browseTo('~');
+			}
+			$('#tnl-bm-x').onclick = () => { $('#tnl-bm').style.display = 'none'; };
+			$('#tnl-bm').addEventListener('click', e => { if (e.target.id === 'tnl-bm') $('#tnl-bm').style.display = 'none'; });
+			$('#tnl-bm-list').addEventListener('click', e => {
+				const it = e.target.closest('.tnl-bm-item[data-go]');
+				if (it) browseTo(it.dataset.go);
+			});
+			$('#tnl-bm-pick').onclick = () => { // 追加到对应设备的白名单输入框（去重）
+				if (!browseAbs) return;
+				const row = document.querySelector('.tnl-cfg[data-id="' + browseId + '"]');
+				if (!row) return;
+				const inp = row.querySelector('.tnl-wl');
+				const cur = (inp.value || '').split(/[\n,，]+/).map(s => s.trim()).filter(Boolean);
+				const p = rel(browseAbs) || '~';
+				if (!cur.includes(p)) cur.push(p);
+				inp.value = cur.join(', ');
+				$('#tnl-bm').style.display = 'none';
+			};
 
 		async function loadAudit() {
 			try {
@@ -218,7 +285,9 @@ export default defineView({
 					'<label><input type="checkbox" class="tnl-cfg-fsr" ' + (caps.fsRead ? 'checked' : '') + '> 文件读</label>',
 					'<label><input type="checkbox" class="tnl-cfg-fsw" ' + (caps.fsWrite ? 'checked' : '') + '> 文件写</label>',
 					'<input class="tnl-wl" value="' + esc((caps.whitelist ?? []).join(', ')) + '" placeholder="白名单目录（逗号分隔）">',
+					'<button class="tnl-btn tnl-cfg-browse" data-id="' + esc(x.id) + '">浏览…</button>',
 					'<button class="tnl-btn tnl-cfg-save" data-id="' + esc(x.id) + '">保存配置</button>',
+					'<button class="tnl-btn danger tnl-cfg-uninst" data-id="' + esc(x.id) + '">卸载</button>',
 					'</div>',
 				].join('') : '';
 				return '<div class="tnl-row">' + dot + nm + osf + tag + '</div>' + cfgRow;

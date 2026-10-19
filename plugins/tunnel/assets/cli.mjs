@@ -139,6 +139,18 @@ const ctrlSrv = http.createServer((req, res) => {
       });
       return;
     }
+    if (u.pathname === '/fs/browse') { // 目录浏览：仅目录名（供面板选白名单路径）；不做白名单校验但审计覆盖，文件内容仍需白名单
+      if (!cfg.fsRead) { audit('fs.browse.denied', ''); return json(res, 403, { error: '读开关未开启' }); }
+      const raw = u.searchParams.get('path') || '~';
+      try {
+        const p = path.resolve(expandHome(raw));
+        const dirs = fs.readdirSync(p, { withFileTypes: true })
+          .filter(e => e.isDirectory() && !e.name.startsWith('.'))
+          .map(e => e.name).sort();
+        audit('fs.browse', raw);
+        return json(res, 200, { path: p, parent: path.dirname(p), home: homedir(), dirs });
+      } catch (e) { audit('fs.browse.denied', raw); return json(res, 400, { error: String(e.code || e.message || e) }); }
+    }
     if (u.pathname === '/devices') {
       audit('devices.enum', os.platform());
       return listDevices((err, d) => json(res, err ? 500 : 200, err ? { error: err } : d));
@@ -184,6 +196,38 @@ function connect() {
       saveCfg();
       console.log(`[tunnel] 配置已更新: fsRead=${cfg.fsRead} fsWrite=${cfg.fsWrite} 白名单=${cfg.whitelist.length} 项`);
       try { ws.send(JSON.stringify({ t: 'hello', name: process.env.PI_TUNNEL_NAME || os.hostname(), os: `${os.platform()} ${os.release()} ${os.arch()}`, ctrlPort })); } catch {}
+    }
+    else if (m.t === 'ctrl') { // 面板经 server 转发的控制请求：自连本机 ctrlSrv，复用全部鉴权/审计
+      const rq = http.get({ host: '127.0.0.1', port: ctrlPort, path: m.url, headers: { 'X-Tunnel-Token': TOKEN } }, r => {
+        let body = '';
+        r.on('data', d => body += d);
+        r.on('end', () => { try { ws.send(JSON.stringify({ t: 'ctrl-resp', rid: m.rid, status: r.statusCode, body: JSON.parse(body) })); } catch {} });
+      });
+      rq.on('error', () => { try { ws.send(JSON.stringify({ t: 'ctrl-resp', rid: m.rid, status: 500, body: { error: 'ctrl unreachable' } })); } catch {} });
+    }
+    else if (m.t === 'uninstall') { // 面板下发：自卸载（停常驻→删配置与 CLI 文件→退出）
+      audit('cli.uninstall', os.platform());
+      try { if (ws.readyState === 1) ws.send(JSON.stringify({ t: 'audit', items: auditBuf.splice(0) })); } catch {}
+      const home = homedir();
+      const run = (cmd, args) => new Promise(r => execFile(cmd, args, { timeout: 8000 }, () => r()));
+      const rm = f => { try { fs.rmSync(f, { force: true }); } catch {} };
+      const stopPersist = process.platform === 'darwin'
+        ? run('launchctl', ['bootout', `gui/${process.getuid()}/com.pi-tunnel.cli`])
+            .then(() => rm(path.join(home, 'Library/LaunchAgents/com.pi-tunnel.cli.plist')))
+        : process.platform === 'win32'
+          ? run('schtasks', ['/Delete', '/TN', 'pi-tunnel', '/F'])
+          : run('systemctl', ['--user', 'stop', 'pi-tunnel-cli'])
+              .then(() => run('systemctl', ['--user', 'disable', 'pi-tunnel-cli']))
+              .then(() => rm(path.join(home, '.config/systemd/user/pi-tunnel-cli.service')))
+              .then(() => run('systemctl', ['--user', 'daemon-reload']));
+      stopPersist.finally(() => {
+        rm(path.join(home, 'pi-tunnel-cli.mjs'));
+        rm(CFG_FILE);
+        console.log('[tunnel] 已卸载（常驻+文件），退出');
+        try { ws.close(); } catch {}
+        setTimeout(() => process.exit(0), 400);
+      });
+      return;
     }
     else if (m.t === 'kicked') { // 同名新实例接管：长退避，避免互踢循环
       reconnectDelay = 60000;
