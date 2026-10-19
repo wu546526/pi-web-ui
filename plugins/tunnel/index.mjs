@@ -477,6 +477,7 @@ export default {
 						return res.end(JSON.stringify({ error: '模型通道无法解析（未找到当前会话模型或网关 key）——可在面板设置手动配置 modelEnv' }));
 					}
 					const payload = JSON.stringify({ prompt: String(j.prompt ?? ''), tools: String(j.tools || 'read,grep,glob'), env: me.env, model: me.model, timeoutS: +j.timeoutS || 300 });
+					console.log(`[tunnel] task → ${id} model=${me.model} baseUrl=${me.env.OPENAI_BASE_URL || '-'} promptLen=${payload.length}`);
 					const d = id ? await deviceCtrl(id, '/task', { method: 'POST', body: payload }, (+j.timeoutS || 300) * 1000 + 30000) : { status: 400, body: { error: '缺少设备 id' } };
 					res.setHeader('content-type', 'application/json');
 					res.end(JSON.stringify(d.body));
