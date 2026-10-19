@@ -214,11 +214,22 @@ const ctrlSrv = http.createServer((req, res) => {
           if (typeof env[k] === 'string' && env[k]) allowEnv[k] = env[k];
         }
         audit('task.run', `${tools} | ${prompt.slice(0, 60)}`);
+        // pi 不认 OPENAI_BASE_URL env：模型配置走专用目录 models.json（PI_CODING_AGENT_DIR 指过去，不碰设备用户配置）
+        const agentDir = path.join(homedir(), '.pi-tunnel-agent');
+        const spawnEnv = { ...process.env, ...allowEnv };
+        if (model && allowEnv.OPENAI_BASE_URL && allowEnv.OPENAI_API_KEY) {
+          try {
+            fs.mkdirSync(agentDir, { recursive: true });
+            const mj = { providers: { tunnel: { baseUrl: allowEnv.OPENAI_BASE_URL, api: 'openai-completions', apiKey: allowEnv.OPENAI_API_KEY, models: [{ id: model }] } } };
+            fs.writeFileSync(path.join(agentDir, 'models.json'), JSON.stringify(mj, null, 2), { mode: 0o600 });
+            spawnEnv.PI_CODING_AGENT_DIR = agentDir;
+          } catch {}
+        }
         taskBusy = true;
         const args = ['-ne', '-p', prompt, '--mode', 'json', '--no-session', '--tools', tools]; // -ne: 设备执行器裸奵（TUI 扩展集不适用且可能缺依赖致命）
-        if (model) args.push('--model', model);
+        if (model && spawnEnv.PI_CODING_AGENT_DIR) args.push('--model', 'tunnel/' + model);
         const t0 = Date.now();
-        execFile(piPath, args, { timeout: timeoutS * 1000, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, ...allowEnv } }, (e, so, se) => {
+        execFile(piPath, args, { timeout: timeoutS * 1000, maxBuffer: 4 * 1024 * 1024, env: spawnEnv }, (e, so, se) => {
           taskBusy = false;
           json(res, e && !so ? 500 : 200, { ok: !e || !!so, ms: Date.now() - t0, output: String(so || '').slice(-40000), err: String(se || '').slice(-500) });
         });
