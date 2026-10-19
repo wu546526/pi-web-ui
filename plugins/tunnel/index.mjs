@@ -251,6 +251,8 @@ export default {
 							}
 							try { host.notify('info', `网络隧道：设备 ${a?.name || aid}（${a?.os || '未知系统'}）已就绪`); } catch {}
 							if (!agentById(state.activeAgentId)) state.activeAgentId = aid;
+							// 重连自动同步持久化配置（fsWrite/fsRead/白名单）——防设备离线期配置死锁
+							if (devCfg[a.name]) toAgent(aid, { t: 'config', ...devCfg[a.name] });
 							break;
 						}
 						case 'audit': { // C 档 P1：CLI 批量上报的操作审计
@@ -428,22 +430,23 @@ export default {
 		const offConfig = host.route('POST', '/agent/config', async (req, res) => {
 			{
 				const j = await readBodyJson(req);
-				let id = '', patch = {};
-				id = String(j.id ?? ''); patch = j;
+				let id = '', patch = {}, name = '';
+				id = String(j.id ?? ''); patch = j; name = String(j.name || '');
 				const a = state.agents.get(id);
+				const nm = a?.name || name; // 离线预配置：设备 crash/不在线时可直接传 name 持久化，重连自动下发（防 fsWrite 死锁）
 				res.setHeader('content-type', 'application/json');
-				if (!a) return res.end(JSON.stringify({ ok: false, error: '设备不在线' }));
-				const cur = capsOf(a.name);
+				if (!nm) return res.end(JSON.stringify({ ok: false, error: '设备不在线且未提供 name' }));
+				const cur = capsOf(nm);
 				const next = {
 					fsRead: typeof patch.fsRead === 'boolean' ? patch.fsRead : (cur.fsRead ?? true),
 					fsWrite: typeof patch.fsWrite === 'boolean' ? patch.fsWrite : (cur.fsWrite ?? false),
 					whitelist: Array.isArray(patch.whitelist) && patch.whitelist.length ? patch.whitelist : (cur.whitelist ?? ['~/Downloads']),
 				};
-				devCfg[a.name] = next;
+				devCfg[nm] = next;
 				saveDevCfg();
-				toAgent(id, { t: 'config', ...next });
-				try { host.notify('info', `网络隧道：设备 ${a.name} 配置已更新（fsWrite=${next.fsWrite}）`); } catch {}
-				res.end(JSON.stringify({ ok: true, name: a.name, config: next }));
+				if (a) toAgent(id, { t: 'config', ...next });
+				try { host.notify('info', `网络隧道：设备 ${nm} 配置已更新（fsWrite=${next.fsWrite}${a ? '' : '，待设备上线生效'}）`); } catch {}
+				res.end(JSON.stringify({ ok: true, name: nm, config: next, pending: !a }));
 			}
 		});
 			const offDeviceFs = host.route('POST', '/device/fs', async (req, res) => { // P4: 面板浏览设备目录（选白名单路径用）
