@@ -130,7 +130,8 @@ export default {
 				const prov = full.split('/')[0];
 				const gwModel = full.split('/').slice(1).join('/'); // 剥 provider 前缀 = 网关侧 ID
 				const keys = JSON.parse(fs.readFileSync(path.join(home, '.pi/agent/provider-keys.json'), 'utf8'));
-				const apiKey = keys?.[prov]?.keys?.[0];
+				const kv = keys?.[prov]?.keys?.[0];
+				const apiKey = typeof kv === 'string' ? kv : (kv?.apiKey || kv?.value || kv?.key || '');
 				if (!apiKey) return null;
 				let base = '';
 				if (prov === 'wildwork') base = lanIp ? `http://${lanIp}:${process.env.WILDWORK_GW_PORT || '7863'}/v1` : '';
