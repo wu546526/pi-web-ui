@@ -178,9 +178,18 @@ export default {
 						case 'hello': {
 							const a = state.agents.get(aid);
 							if (a) { a.name = String(m.name ?? ''); a.os = String(m.os ?? ''); a.ctrlPort = Number(m.ctrlPort) || 0; }
-							// 同名设备顶替：同一台机器的新实例接管，旧连接踢下线（防双实例并存/互踢抖动）
-							for (const [oid, oa] of state.agents) {
-								if (oid === aid || !oa.name || oa.name !== a?.name) continue;
+							// 同名设备：能力优先（ctrlPort>0 的 P1 版保留）——旧版重连被拒长退避，根治互踢循环
+							const twin = [...state.agents.entries()].find(([oid, oa]) => oid !== aid && oa.name && oa.name === a?.name && oa.ws.readyState === 1);
+							if (twin) {
+								const [oid, oa] = twin;
+								const newFull = a.ctrlPort > 0 && !(oa.ctrlPort > 0); // 新连接有控制 API 而在线的没有 → 新版接管
+								if (!newFull) {
+									// 新连接是旧版（或在线的也是新版）：拒绝本次连接，令其长退避
+									try { ws.send(JSON.stringify({ t: 'kicked', reason: '同名设备已有功能更全的实例在线' })); } catch {}
+									try { ws.close(); } catch {}
+									state.agents.delete(aid);
+									break;
+								}
 								try { oa.ws.send(JSON.stringify({ t: 'kicked', by: aid })); } catch {}
 								try { oa.ws.close(); } catch {}
 								state.agents.delete(oid);
