@@ -215,7 +215,7 @@ const ctrlSrv = http.createServer((req, res) => {
         }
         audit('task.run', `${tools} | ${prompt.slice(0, 60)}`);
         taskBusy = true;
-        const args = ['-p', prompt, '--mode', 'json', '--no-session', '--tools', tools];
+        const args = ['-ne', '-p', prompt, '--mode', 'json', '--no-session', '--tools', tools]; // -ne: 设备执行器裸奵（TUI 扩展集不适用且可能缺依赖致命）
         if (model) args.push('--model', model);
         const t0 = Date.now();
         execFile(piPath, args, { timeout: timeoutS * 1000, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, ...allowEnv } }, (e, so, se) => {
