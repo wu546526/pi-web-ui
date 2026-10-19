@@ -7,37 +7,59 @@
 import { defineView } from './sdk/index.mjs';
 
 const CSS = `
-.tnl-wrap { font-family: -apple-system, "PingFang SC", sans-serif; font-size: 13px; line-height: 1.7; max-width: 720px; padding: 16px; color: var(--text, inherit); }
-.tnl-card { border: 1px solid var(--border, var(--border-soft, #8884)); border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; background: var(--bg-elev, var(--bg, transparent)); }
+.tnl-wrap { font-family: -apple-system, "PingFang SC", sans-serif; font-size: 13px; line-height: 1.7; max-width: 720px; padding: 18px; color: var(--text, inherit); }
+.tnl-card { border: 1px solid var(--border, var(--border-soft, #8884)); border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; background: var(--bg-elev, var(--bg, transparent)); box-shadow: 0 1px 3px #0001; }
 .tnl-row { display: flex; align-items: center; gap: 10px; margin: 5px 0; flex-wrap: wrap; }
-.tnl-dot { width: 11px; height: 11px; border-radius: 50%; background: var(--text-faint, #999); flex: none; }
+.tnl-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--text-faint, #999); flex: none; }
 .tnl-dot.ok { background: var(--green, #34c759); box-shadow: 0 0 0 3px var(--green-soft, #34c75933); }
 .tnl-dot.bad { background: var(--red, #ff3b30); box-shadow: 0 0 0 3px var(--red-soft, #ff3b3033); }
-.tnl-state { font-size: 15px; font-weight: 700; color: var(--text-strong, var(--text, inherit)); }
+.tnl-state { font-size: 16px; font-weight: 700; color: var(--text-strong, var(--text, inherit)); }
 .tnl-label { color: var(--text-dim, #999); min-width: 92px; flex: none; }
 .tnl-mono { font-family: var(--mono, ui-monospace, Menlo, monospace); }
-.tnl-token { font-family: var(--mono, ui-monospace, Menlo, monospace); color: var(--amber-text, var(--text)); background: var(--accent-soft, #8881); border-radius: 5px; padding: 1px 8px; }
-.tnl-btn { border: 1px solid var(--border, #8886); border-radius: 6px; padding: 3px 14px; cursor: pointer; background: transparent; color: var(--text, inherit); font-size: 12px; }
+.tnl-token { font-family: var(--mono, ui-monospace, Menlo, monospace); color: var(--amber-text, var(--text)); background: var(--accent-soft, #8881); border: 1px solid var(--border-soft, #8883); border-radius: 5px; padding: 1px 8px; }
+.tnl-btn { border: 1px solid var(--border, #8886); border-radius: 7px; padding: 3px 14px; cursor: pointer; background: transparent; color: var(--text, inherit); font-size: 12px; transition: background .12s, filter .12s; }
 .tnl-btn:hover { background: var(--accent-soft, #8882); }
+.tnl-btn:active { transform: translateY(1px); }
+.tnl-btn.sm { padding: 2px 10px; font-size: 11px; border-radius: 6px; }
 .tnl-btn.danger { color: var(--red-text, var(--red)); border-color: var(--red, #d33); }
 .tnl-btn.danger:hover { background: var(--red-soft, #d3322); }
 .tnl-btn.primary { color: var(--accent-contrast, #fff); background: var(--accent, #4a7dff); border-color: var(--accent, #4a7dff); }
 .tnl-btn.primary:hover { filter: brightness(1.1); }
+.tnl-btn.tab { border-radius: 7px; }
 .tnl-btn.tab.on { background: var(--accent-soft, #8882); border-color: var(--accent, #4a7dff); color: var(--text-strong, var(--text)); }
-.tnl-code { font-family: var(--mono, ui-monospace, Menlo, monospace); font-size: 11.5px; background: var(--bg-elev2, #8881); border: 1px solid var(--border-soft, #8883); border-radius: 6px; padding: 8px 10px; overflow-x: auto; white-space: pre; color: var(--text); }
+.tnl-code { font-family: var(--mono, ui-monospace, Menlo, monospace); font-size: 11.5px; background: var(--bg-elev2, #8881); border: 1px solid var(--border-soft, #8883); border-radius: 8px; padding: 8px 10px; overflow-x: auto; white-space: pre; color: var(--text); }
 .tnl-a { color: var(--link, var(--accent)); }
 .tnl-a:hover { color: var(--link-hover, var(--accent)); }
 .tnl-dim { color: var(--text-faint, #999); }
 .tnl-copied { color: var(--green, #34c759); }
-.tnl-cfg { display: flex; align-items: center; gap: 8px; margin: 4px 0 4px 21px; flex-wrap: wrap; font-size: 12px; }
+/* ─ 出口设备行：hover 整行高亮，OS 徽章化，当前出口绿标 ─ */
+.tnl-dev { display: flex; align-items: center; gap: 9px; padding: 4px 8px; margin: 2px -8px; border-radius: 8px; flex-wrap: wrap; }
+.tnl-dev:hover { background: var(--bg-elev2, #8882); }
+.tnl-dev .tnl-name { font-family: var(--mono, ui-monospace, Menlo, monospace); font-size: 12.5px; }
+.tnl-os { font-size: 11px; color: var(--text-dim, #999); background: var(--bg-elev2, #8881); border-radius: 4px; padding: 0 7px; line-height: 1.6; }
+.tnl-cur { font-size: 11px; font-weight: 600; color: var(--green-text, var(--green, #34c759)); background: var(--green-soft, #34c75922); border-radius: 4px; padding: 0 8px; line-height: 1.7; }
+.tnl-dev .tnl-btn { margin-left: auto; }
+/* ─ 配置行：左竖线从属视觉，按钮组右靠 ─ */
+.tnl-cfg { display: flex; align-items: center; gap: 8px; margin: 2px 0 6px 8px; padding: 4px 0 4px 12px; border-left: 2px solid var(--border-soft, #8883); flex-wrap: wrap; font-size: 12px; }
 .tnl-cfg label { color: var(--text-dim, #999); display: flex; align-items: center; gap: 3px; }
 .tnl-wl { flex: 1; min-width: 200px; background: var(--bg-elev2, #8881); color: var(--text, inherit); border: 1px solid var(--border, #8884); border-radius: 6px; padding: 3px 8px; font-family: var(--mono, monospace); font-size: 11px; }
-.tnl-bm { position: fixed; inset: 0; background: #0008; display: flex; align-items: center; justify-content: center; z-index: 999; }
-.tnl-bm-card { width: 420px; max-height: 70vh; display: flex; flex-direction: column; background: var(--bg-elev, #1e1e1e); color: var(--text, #eee); border: 1px solid var(--border, #8884); border-radius: 10px; padding: 14px; box-shadow: 0 8px 40px #0008; }
-.tnl-bm-path { font-family: var(--mono, monospace); font-size: 12px; margin: 8px 0; color: var(--text-dim, #aaa); }
-.tnl-bm-list { flex: 1; overflow-y: auto; border: 1px solid var(--border, #8882); border-radius: 6px; min-height: 160px; }
-.tnl-bm-item { padding: 6px 10px; cursor: pointer; font-size: 13px; border-bottom: 1px solid var(--border, #8881); }
-.tnl-bm-item:hover { background: var(--bg-elev2, #8882); }
+.tnl-cfg .tnl-btnrow { display: flex; gap: 6px; margin-left: auto; }
+/* ─ 审计行：时间戳淡色 + 设备名 token ─ */
+.tnl-at { color: var(--text-faint, #888); }
+.tnl-audit .tnl-token { font-size: 11px; padding: 0 6px; }
+/* ─ 合并卡内小节标题 ─ */
+.tnl-sec { font-weight: 700; margin: 2px 0 6px; }
+.tnl-sep { border: none; border-top: 1px dashed var(--border-soft, #8883); margin: 12px 0; }
+/* ─ 目录选择器 modal ─ */
+.tnl-bm { position: fixed; inset: 0; background: #0009; backdrop-filter: blur(2px); display: flex; align-items: center; justify-content: center; z-index: 999; }
+.tnl-bm-card { width: 440px; max-height: 72vh; display: flex; flex-direction: column; background: var(--bg-elev, #1e1e1e); color: var(--text, #eee); border: 1px solid var(--border, #8884); border-radius: 12px; padding: 0; box-shadow: 0 12px 48px #000a; overflow: hidden; }
+.tnl-bm-head { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--border-soft, #8883); }
+.tnl-bm-path { font-family: var(--mono, monospace); font-size: 11.5px; margin: 10px 14px; padding: 5px 9px; background: var(--bg-elev2, #8881); border-radius: 6px; color: var(--text-dim, #aaa); white-space: nowrap; overflow-x: auto; }
+.tnl-bm-list { flex: 1; overflow-y: auto; border-top: 1px solid var(--border-soft, #8882); border-bottom: 1px solid var(--border-soft, #8882); min-height: 180px; }
+.tnl-bm-item { padding: 7px 12px; cursor: pointer; font-size: 13px; }
+.tnl-bm-item + .tnl-bm-item { border-top: 1px solid var(--border-soft, #8881); }
+.tnl-bm-item:hover { background: var(--accent-soft, #8882); }
+.tnl-bm-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 10px 14px; }
 `;
 
 let lastLanIp = ''; // 由 status 轮询填充；无内网 IP 时命令里用占位符提示替换
@@ -114,27 +136,31 @@ export default defineView({
 		el.appendChild(style);
 		const H = [
 			'<div class="tnl-wrap">',
+			// 状态仪表卡
 			'<div class="tnl-card">',
 			'<div class="tnl-row"><span class="tnl-dot" id="tnl-dot"></span><span class="tnl-state" id="tnl-state">读取中…</span>',
-			'<button class="tnl-btn danger" id="tnl-toggle">停止服务</button></div>',
-			'<div class="tnl-row"><span class="tnl-label">连接数</span><span id="tnl-conns">—</span></div>',
-			'<div class="tnl-row"><span class="tnl-label">端口</span><span class="tnl-mono" id="tnl-ports">—</span></div>',
+			'<button class="tnl-btn danger" id="tnl-toggle" style="margin-left:auto">停止服务</button></div>',
+			'<div class="tnl-row" style="margin-top:10px"><span class="tnl-label">连接数</span><span id="tnl-conns">—</span>',
+			'<span class="tnl-label" style="margin-left:18px">端口</span><span class="tnl-mono" id="tnl-ports">—</span></div>',
 			'</div>',
+			// 出口设备
 			'<div class="tnl-card">',
 			'<div class="tnl-row"><b>出口设备</b><span class="tnl-dim">SOCKS 流量走选中的设备；出口掉线自动切换</span></div>',
 			'<div id="tnl-devs"><div class="tnl-row tnl-dim">加载中…</div></div>',
 			'</div>',
+			// 审计
 			'<div class="tnl-card">',
-			'<div class="tnl-row"><b>操作审计（最近 100 条）</b><span class="tnl-dim">设备侧文件/设备枚举操作记录</span></div>',
-			'<div id="tnl-audit" class="tnl-code" style="max-height:180px;overflow-y:auto">加载中…</div>',
+			'<div class="tnl-row"><b>操作审计（最近 100 条）</b><span class="tnl-dim">设备侧文件/目录枚举操作记录</span></div>',
+			'<div id="tnl-audit" class="tnl-code tnl-audit" style="max-height:190px;overflow-y:auto">加载中…</div>',
 			'</div>',
+			// 接入与部署（令牌 + 常驻化合并）
 			'<div class="tnl-card">',
-			'<div class="tnl-row"><span class="tnl-label">接入令牌</span><span class="tnl-token" id="tnl-token">—</span>',
-			'<button class="tnl-btn danger" id="tnl-rotate">重置令牌</button></div>',
-			'<div class="tnl-row tnl-dim">重置后所有已分发 CLI 将无法重连，需重新下载。</div>',
-			'</div>',
-			'<div class="tnl-card">',
-			'<div class="tnl-row"><b>设备常驻化（一次性，装完不开终端；按设备系统选页签）</b></div>',
+			'<div class="tnl-sec">接入令牌</div>',
+			'<div class="tnl-row"><span class="tnl-token" id="tnl-token">—</span>',
+			'<button class="tnl-btn danger sm" id="tnl-rotate">重置令牌</button>',
+			'<span class="tnl-dim" style="font-size:11px">重置后所有已分发 CLI 将无法重连，需重新下载</span></div>',
+			'<hr class="tnl-sep">',
+			'<div class="tnl-sec">设备常驻化 <span class="tnl-dim" style="font-weight:400;font-size:12px">一次性安装，装完不开终端；按设备系统选页签</span></div>',
 			'<div class="tnl-row" id="tnl-tabs">',
 			'<button class="tnl-btn tab on" data-os="macOS">macOS</button>',
 			'<button class="tnl-btn tab" data-os="Windows">Windows</button>',
@@ -142,19 +168,19 @@ export default defineView({
 			'</div>',
 			'<div class="tnl-code" id="tnl-persist"></div>',
 			'<div class="tnl-row" style="margin-top:8px">',
-			'<button class="tnl-btn primary" id="tnl-copy">复制当前页签命令</button>',
+			'<button class="tnl-btn primary sm" id="tnl-copy">复制当前页签命令</button>',
 			'<span class="tnl-copied" id="tnl-copy-ok" style="display:none">已复制</span>',
 			'<a class="tnl-a" id="tnl-dl" href="/plugins-api/tunnel/cli" download="pi-tunnel-cli.mjs">下载 CLI（已注入令牌）</a>',
 			'</div>',
-			'<div class="tnl-row tnl-dim">AI 侧探测： curl --socks5-hostname 127.0.0.1:1080 &lt;url&gt;</div>',
+			'<div class="tnl-row tnl-dim" style="font-size:11px;margin-top:8px">AI 侧探测： curl --socks5-hostname 127.0.0.1:1080 &lt;url&gt;</div>',
 			'</div>',
-			// P4: 目录选择器 modal（默认隐藏，浏览设备目录选白名单路径）
+			// P4: 目录选择器 modal（默认隐藏）
 			'<div class="tnl-bm" id="tnl-bm" style="display:none">',
 			'<div class="tnl-bm-card">',
-			'<div style="display:flex;justify-content:space-between;align-items:center"><b>选择白名单目录</b><button class="tnl-btn" id="tnl-bm-x">关闭</button></div>',
+			'<div class="tnl-bm-head"><b>选择白名单目录</b><button class="tnl-btn sm" id="tnl-bm-x">关闭</button></div>',
 			'<div class="tnl-bm-path" id="tnl-bm-path">—</div>',
 			'<div class="tnl-bm-list" id="tnl-bm-list">加载中…</div>',
-			'<div class="tnl-row" style="margin-top:10px;justify-content:flex-end">',
+			'<div class="tnl-bm-foot">',
 			'<button class="tnl-btn primary" id="tnl-bm-pick">选择此目录</button>',
 			'</div>',
 			'</div>',
@@ -256,8 +282,8 @@ export default defineView({
 				const r = await fetch('/plugins-api/tunnel/audit');
 				const d = await r.json();
 				const items = d.items ?? [];
-				$('#tnl-audit').textContent = items.length
-					? items.map(it => new Date(it.ts).toLocaleTimeString() + '  [' + it.device + '] ' + it.op + '  ' + it.detail).join('\n')
+				$('#tnl-audit').innerHTML = items.length
+					? items.map(it => '<span class="tnl-at">' + new Date(it.ts).toLocaleTimeString() + '</span>  <span class="tnl-token">' + esc(it.device) + '</span> ' + esc(it.op) + (it.detail ? '  <span class="tnl-dim">' + esc(String(it.detail).slice(0, 80)) + '</span>' : '')).join('<br>')
 					: '暂无操作记录';
 			} catch { /* 审计拉取失败静默 */ }
 		}
@@ -268,29 +294,31 @@ export default defineView({
 			const dv = $('#tnl-devs');
 			const list = d.devices ?? [];
 			if (!list.length) {
-				dv.innerHTML = '<div class="tnl-row tnl-dim">暂无设备连入——在主人设备上运行 CLI 后出现在这里</div>';
+				dv.innerHTML = '<div class="tnl-dim" style="padding:10px 8px;font-size:12px">暂无设备连入 —— 在主人设备上运行 CLI 后出现在这里</div>';
 				return;
 			}
 			dv.innerHTML = list.map(x => {
 				const dot = '<span class="tnl-dot ' + (x.online ? 'ok' : '') + '"></span>';
-				const nm = '<span class="tnl-mono">' + esc(x.name) + '</span>';
-				const osf = '<span class="tnl-dim">' + esc(x.os || '—') + '</span>';
+				const nm = '<span class="tnl-name">' + esc(x.name) + '</span>';
+				const osf = '<span class="tnl-os">' + esc(x.os || '—') + '</span>';
 				let tag;
-				if (x.id === d.activeAgentId) tag = '<span class="tnl-token">当前出口</span>';
-				else if (x.online) tag = '<button class="tnl-btn" data-id="' + esc(x.id) + '">设为出口</button>';
-				else tag = '<span class="tnl-dim">重连中</span>';
+				if (x.id === d.activeAgentId) tag = '<span class="tnl-cur">当前出口</span>';
+				else if (x.online) tag = '<button class="tnl-btn sm" data-id="' + esc(x.id) + '">设为出口</button>';
+				else tag = '<span class="tnl-dim" style="font-size:11px">重连中</span>';
 				const caps = x.caps ?? {};
 				const cfgRow = x.online ? [
 					'<div class="tnl-cfg" data-id="' + esc(x.id) + '">',
 					'<label><input type="checkbox" class="tnl-cfg-fsr" ' + (caps.fsRead ? 'checked' : '') + '> 文件读</label>',
 					'<label><input type="checkbox" class="tnl-cfg-fsw" ' + (caps.fsWrite ? 'checked' : '') + '> 文件写</label>',
 					'<input class="tnl-wl" value="' + esc((caps.whitelist ?? []).join(', ')) + '" placeholder="白名单目录（逗号分隔）">',
-					'<button class="tnl-btn tnl-cfg-browse" data-id="' + esc(x.id) + '">浏览…</button>',
-					'<button class="tnl-btn tnl-cfg-save" data-id="' + esc(x.id) + '">保存配置</button>',
-					'<button class="tnl-btn danger tnl-cfg-uninst" data-id="' + esc(x.id) + '">卸载</button>',
+					'<span class="tnl-btnrow">',
+					'<button class="tnl-btn sm tnl-cfg-browse" data-id="' + esc(x.id) + '">浏览…</button>',
+					'<button class="tnl-btn sm primary tnl-cfg-save" data-id="' + esc(x.id) + '">保存配置</button>',
+					'<button class="tnl-btn sm danger tnl-cfg-uninst" data-id="' + esc(x.id) + '">卸载</button>',
+					'</span>',
 					'</div>',
 				].join('') : '';
-				return '<div class="tnl-row">' + dot + nm + osf + tag + '</div>' + cfgRow;
+				return '<div class="tnl-dev">' + dot + nm + osf + tag + '</div>' + cfgRow;
 			}).join('');
 		}
 
