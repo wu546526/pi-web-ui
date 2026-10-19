@@ -249,10 +249,10 @@ export default {
 									state.conns.delete(cid2);
 								}
 							}
-							try { host.notify('info', `网络隧道：设备 ${a?.name || aid}（${a?.os || '未知系统'}）已就绪`); } catch {}
+							try { notifyDebounced('info', `网络隧道：设备 ${a?.name || aid}（${a?.os || '未知系统'}）已就绪`); } catch {}
 							if (!agentById(state.activeAgentId)) state.activeAgentId = aid;
-							// 重连自动同步持久化配置（fsWrite/fsRead/白名单）——防设备离线期配置死锁
-							if (devCfg[a.name]) toAgent(aid, { t: 'config', ...devCfg[a.name] });
+							// 重连自动同步持久化配置（一次性标志，防 hello↔config 死循环：CLI 收 config 回 hello，server 又推 → 无限闪烁）
+							if (devCfg[a.name] && !a.cfgSent) { a.cfgSent = true; toAgent(aid, { t: 'config', ...devCfg[a.name] }); }
 							break;
 						}
 						case 'audit': { // C 档 P1：CLI 批量上报的操作审计

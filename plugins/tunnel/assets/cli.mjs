@@ -285,13 +285,12 @@ function connect() {
     } else if (m.t === 'data')  sockMap.get(m.id)?.write(Buffer.from(m.b64, 'base64'));
     else if (m.t === 'end')     sockMap.get(m.id)?.end();
     else if (m.t === 'close') { sockMap.get(m.id)?.destroy(); sockMap.delete(m.id); }
-    else if (m.t === 'config') { // 面板下发：能力开关/白名单
+    else if (m.t === 'config') { // 面板下发：能力开关/白名单（不回 hello——server 侧有一次性推送标志，回 hello 会成死循环）
       if (Array.isArray(m.whitelist)) cfg.whitelist = m.whitelist.map(p => p.startsWith('~') ? path.join(homedir(), p.slice(1)) : p);
       if (typeof m.fsRead === 'boolean') cfg.fsRead = m.fsRead;
       if (typeof m.fsWrite === 'boolean') cfg.fsWrite = m.fsWrite;
       saveCfg();
       console.log(`[tunnel] 配置已更新: fsRead=${cfg.fsRead} fsWrite=${cfg.fsWrite} 白名单=${cfg.whitelist.length} 项`);
-      try { ws.send(JSON.stringify({ t: 'hello', name: process.env.PI_TUNNEL_NAME || os.hostname(), os: `${os.platform()} ${os.release()} ${os.arch()}`, ctrlPort, ver: CLI_VER })); } catch {}
     }
     else if (m.t === 'ctrl') { // 面板经 server 转发的控制请求：自连本机 ctrlSrv，复用全部鉴权/审计（支持 POST body）
       const reqOpts = { host: '127.0.0.1', port: ctrlPort, path: m.url, method: m.method || 'GET', headers: { 'X-Tunnel-Token': TOKEN } };
