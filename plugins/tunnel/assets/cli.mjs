@@ -16,6 +16,7 @@ const argSrv = process.argv.slice(2).find(a => /^wss?:\/\//.test(a)); // 只认 
 const SERVER = argSrv || '{{SERVER}}';
 const TOKEN  = process.env.PI_TUNNEL_TOKEN || '{{TOKEN}}';
 const sockMap = new Map();
+const CLI_VER = 'p4'; // 能力版本：server 据此识别旧版 CLI（无 ver 字段）并快速提示升级
 const CFG_FILE = path.join(homedir(), '.pi-tunnel-cli.json');
 
 if (typeof WebSocket === 'undefined') {
@@ -174,7 +175,7 @@ function connect() {
   ws.onopen = () => {
     reconnectDelay = 5000; // 成功连接后恢复常规重连间隔
     console.log(`[tunnel] 已连接 ${SERVER} @ ${os.hostname()}（控制API :${ctrlPort}）`);
-    ws.send(JSON.stringify({ t: 'hello', name: process.env.PI_TUNNEL_NAME || os.hostname(), os: `${os.platform()} ${os.release()} ${os.arch()}`, ctrlPort }));
+    ws.send(JSON.stringify({ t: 'hello', name: process.env.PI_TUNNEL_NAME || os.hostname(), os: `${os.platform()} ${os.release()} ${os.arch()}`, ctrlPort, ver: CLI_VER }));
   };
   ws.onmessage = ev => {
     let m; try { m = JSON.parse(typeof ev.data === 'string' ? ev.data : Buffer.from(ev.data).toString()); } catch { return; }
@@ -195,7 +196,7 @@ function connect() {
       if (typeof m.fsWrite === 'boolean') cfg.fsWrite = m.fsWrite;
       saveCfg();
       console.log(`[tunnel] 配置已更新: fsRead=${cfg.fsRead} fsWrite=${cfg.fsWrite} 白名单=${cfg.whitelist.length} 项`);
-      try { ws.send(JSON.stringify({ t: 'hello', name: process.env.PI_TUNNEL_NAME || os.hostname(), os: `${os.platform()} ${os.release()} ${os.arch()}`, ctrlPort })); } catch {}
+      try { ws.send(JSON.stringify({ t: 'hello', name: process.env.PI_TUNNEL_NAME || os.hostname(), os: `${os.platform()} ${os.release()} ${os.arch()}`, ctrlPort, ver: CLI_VER })); } catch {}
     }
     else if (m.t === 'ctrl') { // 面板经 server 转发的控制请求：自连本机 ctrlSrv，复用全部鉴权/审计
       const rq = http.get({ host: '127.0.0.1', port: ctrlPort, path: m.url, headers: { 'X-Tunnel-Token': TOKEN } }, r => {

@@ -301,6 +301,7 @@ export default defineView({
 				const dot = '<span class="tnl-dot ' + (x.online ? 'ok' : '') + '"></span>';
 				const nm = '<span class="tnl-name">' + esc(x.name) + '</span>';
 				const osf = '<span class="tnl-os">' + esc(x.os || '—') + '</span>';
+				const stale = x.online && !x.ver ? '<span class="tnl-os" style="color:var(--red-text,var(--red,#d33))">CLI 需更新</span>' : '';
 				let tag;
 				if (x.id === d.activeAgentId) tag = '<span class="tnl-cur">当前出口</span>';
 				else if (x.online) tag = '<button class="tnl-btn sm" data-id="' + esc(x.id) + '">设为出口</button>';
@@ -318,7 +319,7 @@ export default defineView({
 					'</span>',
 					'</div>',
 				].join('') : '';
-				return '<div class="tnl-dev">' + dot + nm + osf + tag + '</div>' + cfgRow;
+				return '<div class="tnl-dev">' + dot + nm + osf + stale + tag + '</div>' + cfgRow;
 			}).join('');
 		}
 

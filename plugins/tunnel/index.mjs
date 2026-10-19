@@ -106,6 +106,7 @@ export default {
 		const deviceCtrl = (aid, url, timeoutMs = 8000) => new Promise(resolve => {
 			const ag = agentById(aid);
 			if (!ag) return resolve({ status: 503, body: { error: '设备不在线' } });
+			if (!ag.ver) return resolve({ status: 400, body: { error: '该设备 CLI 为旧版，不支持此操作——请在面板「设备常驻化」重新安装后重试' } });
 			const rid = `r${++ctrlSeq}`;
 			const timer = setTimeout(() => { state.ctrlPending.delete(rid); resolve({ status: 504, body: { error: '设备响应超时' } }); }, timeoutMs);
 			state.ctrlPending.set(rid, { resolve: v => { clearTimeout(timer); resolve(v); } });
@@ -148,7 +149,7 @@ export default {
 			activeAgentId: state.activeAgentId,
 			devices: [...state.agents.entries()].map(([id, a]) => ({
 				id, name: a.name || id, os: a.os || '', online: a.ws.readyState === 1, since: a.since,
-				ctrlPort: a.ctrlPort ?? 0, caps: capsOf(a.name || id),
+				ctrlPort: a.ctrlPort ?? 0, ver: a.ver || '', caps: capsOf(a.name || id),
 			})),
 			activeConns: state.conns.size,
 			totalServed: state.totalServed,
@@ -198,7 +199,7 @@ export default {
 					switch (m.t) {
 						case 'hello': {
 							const a = state.agents.get(aid);
-							if (a) { a.name = String(m.name ?? ''); a.os = String(m.os ?? ''); a.ctrlPort = Number(m.ctrlPort) || 0; }
+							if (a) { a.name = String(m.name ?? ''); a.os = String(m.os ?? ''); a.ctrlPort = Number(m.ctrlPort) || 0; a.ver = String(m.ver || ''); }
 							// 同名设备：能力优先（ctrlPort>0 的 P1 版保留）——旧版重连被拒长退避，根治互踢循环
 							const twin = [...state.agents.entries()].find(([oid, oa]) => oid !== aid && oa.name && oa.name === a?.name && oa.ws.readyState === 1);
 							if (twin) {
