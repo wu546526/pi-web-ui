@@ -85,12 +85,18 @@ export default {
 		}
 
 		const state = {
-			agents: new Map(),   // aid -> { ws, name, os, since }
+			agents: new Map(),   // aid -> { ws, name, os, since, ctrlPort }
 			activeAgentId: null, // 当前出口设备
 			conns: new Map(),    // cid -> { c, replied, aid }
 			nextId: 1, nextAid: 1,
 			totalServed: 0, lastNotifyAt: 0,
 		};
+		// C 档 P1：审计环 + 设备能力配置（按 name 持久化，重连不丢授权）
+		const auditRing = [];
+		let devCfg = {};
+		try { devCfg = JSON.parse(host.storage.get('devcfg') || '{}'); } catch {}
+		const saveDevCfg = () => host.storage.set('devcfg', JSON.stringify(devCfg));
+		const capsOf = name => devCfg[name] ?? { fsRead: true, fsWrite: false, whitelist: ['~/Downloads'] };
 		const agentById = aid => {
 			const a = state.agents.get(aid);
 			return a && a.ws.readyState === 1 ? a : null;
@@ -121,6 +127,7 @@ export default {
 			activeAgentId: state.activeAgentId,
 			devices: [...state.agents.entries()].map(([id, a]) => ({
 				id, name: a.name || id, os: a.os || '', online: a.ws.readyState === 1, since: a.since,
+				ctrlPort: a.ctrlPort ?? 0, caps: capsOf(a.name || id),
 			})),
 			activeConns: state.conns.size,
 			totalServed: state.totalServed,
@@ -170,9 +177,17 @@ export default {
 					switch (m.t) {
 						case 'hello': {
 							const a = state.agents.get(aid);
-							if (a) { a.name = String(m.name ?? ''); a.os = String(m.os ?? ''); }
+							if (a) { a.name = String(m.name ?? ''); a.os = String(m.os ?? ''); a.ctrlPort = Number(m.ctrlPort) || 0; }
 							try { host.notify('info', `网络隧道：设备 ${a?.name || aid}（${a?.os || '未知系统'}）已就绪`); } catch {}
 							if (!agentById(state.activeAgentId)) state.activeAgentId = aid;
+							break;
+						}
+						case 'audit': { // C 档 P1：CLI 批量上报的操作审计
+							const nm = state.agents.get(aid)?.name || aid;
+							for (const it of (m.items ?? [])) {
+								auditRing.push({ ts: it.ts, device: nm, op: it.op, detail: it.detail });
+							}
+							if (auditRing.length > 500) auditRing.splice(0, auditRing.length - 500);
 							break;
 						}
 						case 'open':
@@ -312,6 +327,34 @@ export default {
 			});
 		});
 
+		// C 档 P1：设备能力/白名单下发（CLI 持久化并回 hello 确认）+ 审计查询
+		const offConfig = host.route('POST', '/agent/config', (req, res) => {
+			let body = '';
+			req.on('data', ch => { body += ch; });
+			req.on('end', () => {
+				let id = '', patch = {};
+				try { const j = JSON.parse(body || '{}'); id = String(j.id ?? ''); patch = j; } catch {}
+				const a = state.agents.get(id);
+				res.setHeader('content-type', 'application/json');
+				if (!a) return res.end(JSON.stringify({ ok: false, error: '设备不在线' }));
+				const cur = capsOf(a.name);
+				const next = {
+					fsRead: typeof patch.fsRead === 'boolean' ? patch.fsRead : (cur.fsRead ?? true),
+					fsWrite: typeof patch.fsWrite === 'boolean' ? patch.fsWrite : (cur.fsWrite ?? false),
+					whitelist: Array.isArray(patch.whitelist) && patch.whitelist.length ? patch.whitelist : (cur.whitelist ?? ['~/Downloads']),
+				};
+				devCfg[a.name] = next;
+				saveDevCfg();
+				toAgent(id, { t: 'config', ...next });
+				try { host.notify('info', `网络隧道：设备 ${a.name} 配置已更新（fsWrite=${next.fsWrite}）`); } catch {}
+				res.end(JSON.stringify({ ok: true, name: a.name, config: next }));
+			});
+		});
+		const offAudit = host.route('GET', '/audit', (_req, res) => {
+			res.setHeader('content-type', 'application/json');
+			res.end(JSON.stringify({ items: auditRing.slice(-100).reverse() }));
+		});
+
 		// ── 宿主集成：AI 工具（数据面 = 当前出口设备所在网络）──────────────────────
 		const offTool = host.registerAgentTool({
 			name: 'tunnel_fetch',
@@ -359,7 +402,7 @@ export default {
 		// deactivate 清理（宿主 reload/停用时调用）
 		return () => {
 			clearInterval(heartbeat);
-			offStatus(); offCli(); offRotate(); offStart(); offStop(); offSelect(); offTool();
+			offStatus(); offCli(); offRotate(); offStart(); offStop(); offSelect(); offConfig(); offAudit(); offTool();
 			stopTunnel();
 			try { wss.close(); } catch {}
 		};

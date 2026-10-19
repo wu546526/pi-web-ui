@@ -29,6 +29,9 @@ const CSS = `
 .tnl-a:hover { color: var(--link-hover, var(--accent)); }
 .tnl-dim { color: var(--text-faint, #999); }
 .tnl-copied { color: var(--green, #34c759); }
+.tnl-cfg { display: flex; align-items: center; gap: 8px; margin: 4px 0 4px 21px; flex-wrap: wrap; font-size: 12px; }
+.tnl-cfg label { color: var(--text-dim, #999); display: flex; align-items: center; gap: 3px; }
+.tnl-wl { flex: 1; min-width: 200px; background: var(--bg-elev2, #8881); color: var(--text, inherit); border: 1px solid var(--border, #8884); border-radius: 6px; padding: 3px 8px; font-family: var(--mono, monospace); font-size: 11px; }
 `;
 
 let lastLanIp = ''; // 由 status 轮询填充；无内网 IP 时命令里用占位符提示替换
@@ -116,6 +119,10 @@ export default defineView({
 			'<div id="tnl-devs"><div class="tnl-row tnl-dim">加载中…</div></div>',
 			'</div>',
 			'<div class="tnl-card">',
+			'<div class="tnl-row"><b>操作审计（最近 100 条）</b><span class="tnl-dim">设备侧文件/设备枚举操作记录</span></div>',
+			'<div id="tnl-audit" class="tnl-code" style="max-height:180px;overflow-y:auto">加载中…</div>',
+			'</div>',
+			'<div class="tnl-card">',
 			'<div class="tnl-row"><span class="tnl-label">接入令牌</span><span class="tnl-token" id="tnl-token">—</span>',
 			'<button class="tnl-btn danger" id="tnl-rotate">重置令牌</button></div>',
 			'<div class="tnl-row tnl-dim">重置后所有已分发 CLI 将无法重连，需重新下载。</div>',
@@ -153,13 +160,42 @@ export default defineView({
 		});
 		$('#tnl-persist').textContent = persistCmd(curOs);
 
-		// 出口设备切换（事件委托）
+		// 出口切换 + 设备配置保存（事件委托）
 		$('#tnl-devs').addEventListener('click', async e => {
 			const b = e.target.closest('button[data-id]');
 			if (!b) return;
+			if (b.classList.contains('tnl-cfg-save')) {
+				const wrap = b.closest('.tnl-cfg');
+				const wl = (wrap.querySelector('.tnl-wl').value || '').split(/[\n,，]+/).map(s => s.trim()).filter(Boolean);
+				try { await fetch('/plugins-api/tunnel/agent/config', { method: 'POST', body: JSON.stringify({ id: b.dataset.id, whitelist: wl }) }); } catch {}
+				return;
+			}
 			try { await fetch('/plugins-api/tunnel/agent/select', { method: 'POST', body: JSON.stringify({ id: b.dataset.id }) }); } catch {}
 			refresh();
 		});
+		$('#tnl-devs').addEventListener('change', async e => {
+			const cb = e.target.closest('input[type=checkbox]');
+			if (!cb) return;
+			const wrap = cb.closest('.tnl-cfg');
+			if (!wrap) return;
+			const patch = { id: wrap.dataset.id };
+			if (cb.classList.contains('tnl-cfg-fsr')) patch.fsRead = cb.checked;
+			if (cb.classList.contains('tnl-cfg-fsw')) patch.fsWrite = cb.checked;
+			try { await fetch('/plugins-api/tunnel/agent/config', { method: 'POST', body: JSON.stringify(patch) }); } catch {}
+		});
+
+		async function loadAudit() {
+			try {
+				const r = await fetch('/plugins-api/tunnel/audit');
+				const d = await r.json();
+				const items = d.items ?? [];
+				$('#tnl-audit').textContent = items.length
+					? items.map(it => new Date(it.ts).toLocaleTimeString() + '  [' + it.device + '] ' + it.op + '  ' + it.detail).join('\n')
+					: '暂无操作记录';
+			} catch { /* 审计拉取失败静默 */ }
+		}
+		loadAudit();
+		const auditTimer = setInterval(loadAudit, 10000);
 
 		function renderDevs(d) {
 			const dv = $('#tnl-devs');
@@ -176,7 +212,16 @@ export default defineView({
 				if (x.id === d.activeAgentId) tag = '<span class="tnl-token">当前出口</span>';
 				else if (x.online) tag = '<button class="tnl-btn" data-id="' + esc(x.id) + '">设为出口</button>';
 				else tag = '<span class="tnl-dim">重连中</span>';
-				return '<div class="tnl-row">' + dot + nm + osf + tag + '</div>';
+				const caps = x.caps ?? {};
+				const cfgRow = x.online ? [
+					'<div class="tnl-cfg" data-id="' + esc(x.id) + '">',
+					'<label><input type="checkbox" class="tnl-cfg-fsr" ' + (caps.fsRead ? 'checked' : '') + '> 文件读</label>',
+					'<label><input type="checkbox" class="tnl-cfg-fsw" ' + (caps.fsWrite ? 'checked' : '') + '> 文件写</label>',
+					'<input class="tnl-wl" value="' + esc((caps.whitelist ?? []).join(', ')) + '" placeholder="白名单目录（逗号分隔）">',
+					'<button class="tnl-btn tnl-cfg-save" data-id="' + esc(x.id) + '">保存配置</button>',
+					'</div>',
+				].join('') : '';
+				return '<div class="tnl-row">' + dot + nm + osf + tag + '</div>' + cfgRow;
 			}).join('');
 		}
 
@@ -227,6 +272,6 @@ export default defineView({
 			}
 		};
 
-		return () => clearInterval(timer);
+		return () => { clearInterval(timer); clearInterval(auditTimer); };
 	},
 });
