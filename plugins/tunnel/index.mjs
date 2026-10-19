@@ -300,8 +300,19 @@ export default {
 			srv.listen(port, addr, () => resolve(true));
 		});
 		await startTunnel(); // 激活即运行，面板可随时停/启
+		// 心跳 + 半开检测：ping 后未回 pong 的连接判定为僵尸（进程退出未挥手/网络半开），
+		// terminate 触发 close → 从设备表移除（否则假在线残留，SOCKS 全部空响应，20261019 实战根因）
 		const heartbeat = setInterval(() => {
-			for (const [, a] of state.agents) if (a.ws.readyState === 1) a.ws.ping();
+			for (const [aid, a] of state.agents) {
+				if (a.ws.readyState !== 1) continue;
+				if (a.isAlive === false) {
+					try { a.ws.terminate(); } catch {}
+					continue;
+				}
+				a.isAlive = false;
+				a.ws.ping();
+				a.ws.once('pong', () => { a.isAlive = true; });
+			}
 		}, 30_000);
 
 		// ── 宿主集成：route（面板数据 + CLI 下载 + 令牌轮换 + 出口切换 + 启停）───────
