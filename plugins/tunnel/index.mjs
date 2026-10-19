@@ -404,6 +404,7 @@ export default {
 			});
 		});
 			const offDeviceFs = host.route('POST', '/device/fs', (req, res) => { // P4: 面板浏览设备目录（选白名单路径用）
+				console.log('[tunnel] device/fs handler enter');
 				let body = '';
 				req.on('data', ch => { body += ch; });
 				req.on('end', async () => {
