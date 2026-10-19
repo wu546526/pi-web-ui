@@ -303,12 +303,13 @@ function connect() {
       if (m.body) rq.write(m.body);
       rq.end();
     }
-    else if (m.t === 'uninstall') { // 面板下发：自卸载（停常驻→删配置与 CLI 文件→退出）
+    else if (m.t === 'uninstall') { // 面板下发：自卸载（停常驻→删文件与 pi agent 残留→退出）
+      if (taskBusy) { try { ws.send(JSON.stringify({ t: 'ctrl-resp-notify', note: '任务执行中，稍后再卸载' })); } catch {} }
       audit('cli.uninstall', os.platform());
       try { if (ws.readyState === 1) ws.send(JSON.stringify({ t: 'audit', items: auditBuf.splice(0) })); } catch {}
       const home = homedir();
       const run = (cmd, args) => new Promise(r => execFile(cmd, args, { timeout: 8000 }, () => r()));
-      const rm = f => { try { fs.rmSync(f, { force: true }); } catch {} };
+      const rm = f => { try { fs.rmSync(f, { force: true, recursive: true }); } catch {} };
       const stopPersist = process.platform === 'darwin'
         ? run('launchctl', ['bootout', `gui/${process.getuid()}/com.pi-tunnel.cli`])
             .then(() => rm(path.join(home, 'Library/LaunchAgents/com.pi-tunnel.cli.plist')))
@@ -321,7 +322,11 @@ function connect() {
       stopPersist.finally(() => {
         rm(path.join(home, 'pi-tunnel-cli.mjs'));
         rm(CFG_FILE);
-        console.log('[tunnel] 已卸载（常驻+文件），退出');
+        // pi agent 残留清理（B 档新增）：离线包解压目录 + 任务通道配置（含 models.json 网关 key，敏感必清）；
+        // npm 全局形态的 pi 不动（可能是设备共用资产，卸载语义=只移除隧道组件）
+        rm(path.join(home, 'pi-agent'));
+        rm(path.join(home, '.pi-tunnel-agent'));
+        console.log('[tunnel] 已卸载（常驻+文件+pi agent 残留），退出');
         try { ws.close(); } catch {}
         setTimeout(() => process.exit(0), 400);
       });
