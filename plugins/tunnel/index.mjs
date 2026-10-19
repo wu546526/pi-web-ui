@@ -225,7 +225,12 @@ export default {
 					let m; try { m = JSON.parse(raw.toString()); } catch { return; }
 					const e = state.conns.get(m.id);
 					switch (m.t) {
-						case 'hello': {
+							case 'ping': { // 应用层心跳应答（CLI 25s 一发，服务端回 pong 供其判僵尸——TCP 半开时 onclose 不触发，靠这个自愈）
+								const pa = state.agents.get(aid);
+								if (pa) { try { pa.ws.send(JSON.stringify({ t: 'pong' })); } catch {} }
+								break;
+							}
+							case 'hello': {
 							const a = state.agents.get(aid);
 							if (a) { a.name = String(m.name ?? ''); a.os = String(m.os ?? ''); a.ctrlPort = Number(m.ctrlPort) || 0; a.ver = String(m.ver || ''); }
 							// 同名设备：能力优先（ctrlPort>0 的 P1 版保留）——旧版重连被拒长退避，根治互踢循环

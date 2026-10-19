@@ -263,6 +263,18 @@ const ctrlSrv = http.createServer((req, res) => {
 
 let wsRef = null;
 let reconnectDelay = 5000; // 被 kicked 时拉长退避，防同名实例互踢抖动
+// 应用层心跳：TCP 半开（笔记本 sleep/NAT idle 超时）时 onclose 不触发，CLI 假在线——25s 一发 ping，超时无 pong 判僵尸 terminate 强制重连
+let hbTimer = null, hbAlive = true;
+function startHeartbeat(ws) {
+	clearInterval(hbTimer);
+	hbAlive = true;
+	hbTimer = setInterval(() => {
+		if (ws.readyState !== 1) { clearInterval(hbTimer); return; }
+		if (!hbAlive) { console.log('[tunnel] 心跳超时，判定连接僵尸，强制重连'); try { ws.terminate(); } catch {} return; }
+		hbAlive = false;
+		try { ws.send(JSON.stringify({ t: 'ping' })); } catch {}
+	}, 25000);
+}
 function connect() {
   let url;
   try {
@@ -277,9 +289,11 @@ function connect() {
     reconnectDelay = 5000; // 成功连接后恢复常规重连间隔
     console.log(`[tunnel] 已连接 ${SERVER} @ ${os.hostname()}（控制API :${ctrlPort}）`);
     ws.send(JSON.stringify({ t: 'hello', name: process.env.PI_TUNNEL_NAME || os.hostname(), os: `${os.platform()} ${os.release()} ${os.arch()}`, ctrlPort, ver: CLI_VER }));
+    startHeartbeat(ws);
   };
   ws.onmessage = ev => {
     let m; try { m = JSON.parse(typeof ev.data === 'string' ? ev.data : Buffer.from(ev.data).toString()); } catch { return; }
+    if (m.t === 'pong') { hbAlive = true; return; }
     if (m.t === 'connect') {
       const s = net.connect({ host: m.host, port: m.port }, () =>
         ws.send(JSON.stringify({ t: 'open', id: m.id })));
@@ -349,6 +363,7 @@ function connect() {
     }
   };
   ws.onclose = ev => {
+    clearInterval(hbTimer);
     console.log(`[tunnel] 断开(${ev.code ?? ''}) ${reconnectDelay / 1000}s后重连`);
     for (const s of sockMap.values()) s.destroy();
     sockMap.clear();
