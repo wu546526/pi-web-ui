@@ -225,7 +225,7 @@ const ctrlSrv = http.createServer((req, res) => {
             fs.writeFileSync(path.join(agentDir, 'models.json'), JSON.stringify(mj, null, 2), { mode: 0o600 });
             spawnEnv.PI_CODING_AGENT_DIR = agentDir;
             try { const gh = new URL(allowEnv.OPENAI_BASE_URL).hostname; const np = [process.env.NO_PROXY, process.env.no_proxy, gh].filter(Boolean).join(','); spawnEnv.NO_PROXY = np; spawnEnv.no_proxy = np; } catch {}
-            console.log('[task] models.json 已写入', agentDir);
+            console.log('[task] models.json 已写入', agentDir, '| NO_PROXY=', spawnEnv.NO_PROXY, '| HTTP_PROXY=', spawnEnv.HTTP_PROXY || '(无)');
           } catch (e) { console.log('[task] models.json 写失败:', e.message); }
         }
         taskBusy = true;
