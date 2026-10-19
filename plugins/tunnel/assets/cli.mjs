@@ -148,6 +148,7 @@ const ctrlSrv = http.createServer((req, res) => {
 });
 
 let wsRef = null;
+let reconnectDelay = 5000; // 被 kicked 时拉长退避，防同名实例互踢抖动
 function connect() {
   let url;
   try {
@@ -159,6 +160,7 @@ function connect() {
   const ws = new WebSocket(url);
   wsRef = ws;
   ws.onopen = () => {
+    reconnectDelay = 5000; // 成功连接后恢复常规重连间隔
     console.log(`[tunnel] 已连接 ${SERVER} @ ${os.hostname()}（控制API :${ctrlPort}）`);
     ws.send(JSON.stringify({ t: 'hello', name: process.env.PI_TUNNEL_NAME || os.hostname(), os: `${os.platform()} ${os.release()} ${os.arch()}`, ctrlPort }));
   };
@@ -183,12 +185,18 @@ function connect() {
       console.log(`[tunnel] 配置已更新: fsRead=${cfg.fsRead} fsWrite=${cfg.fsWrite} 白名单=${cfg.whitelist.length} 项`);
       try { ws.send(JSON.stringify({ t: 'hello', name: process.env.PI_TUNNEL_NAME || os.hostname(), os: `${os.platform()} ${os.release()} ${os.arch()}`, ctrlPort })); } catch {}
     }
+    else if (m.t === 'kicked') { // 同名新实例接管：长退避，避免互踢循环
+      reconnectDelay = 60000;
+      console.log('[tunnel] 此设备有新实例接管，60s 后重连');
+      try { ws.close(); } catch {}
+      return;
+    }
   };
   ws.onclose = ev => {
-    console.log(`[tunnel] 断开(${ev.code ?? ''}) 5s后重连`);
+    console.log(`[tunnel] 断开(${ev.code ?? ''}) ${reconnectDelay / 1000}s后重连`);
     for (const s of sockMap.values()) s.destroy();
     sockMap.clear();
-    setTimeout(connect, 5000);
+    setTimeout(connect, reconnectDelay);
   };
   ws.onerror = () => {};
 }

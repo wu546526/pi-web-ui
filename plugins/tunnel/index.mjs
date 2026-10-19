@@ -178,6 +178,18 @@ export default {
 						case 'hello': {
 							const a = state.agents.get(aid);
 							if (a) { a.name = String(m.name ?? ''); a.os = String(m.os ?? ''); a.ctrlPort = Number(m.ctrlPort) || 0; }
+							// 同名设备顶替：同一台机器的新实例接管，旧连接踢下线（防双实例并存/互踢抖动）
+							for (const [oid, oa] of state.agents) {
+								if (oid === aid || !oa.name || oa.name !== a?.name) continue;
+								try { oa.ws.send(JSON.stringify({ t: 'kicked', by: aid })); } catch {}
+								try { oa.ws.close(); } catch {}
+								state.agents.delete(oid);
+								for (const [cid2, e2] of state.conns) {
+									if (e2.aid !== oid) continue;
+									try { e2.c.destroy(); } catch {}
+									state.conns.delete(cid2);
+								}
+							}
 							try { host.notify('info', `网络隧道：设备 ${a?.name || aid}（${a?.os || '未知系统'}）已就绪`); } catch {}
 							if (!agentById(state.activeAgentId)) state.activeAgentId = aid;
 							break;
