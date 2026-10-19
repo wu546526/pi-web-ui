@@ -319,7 +319,9 @@ function connect() {
       const rm = f => { try { fs.rmSync(f, { force: true, recursive: true }); } catch {} };
       const stopPersist = process.platform === 'darwin'
         ? run('launchctl', ['bootout', `gui/${process.getuid()}/com.pi-tunnel.cli`])
+            .then(() => run('launchctl', ['bootout', `gui/${process.getuid()}/com.gxg.pi-tunnel`])) // 历史版本 label（旧设备实装名），双 label 都卸
             .then(() => rm(path.join(home, 'Library/LaunchAgents/com.pi-tunnel.cli.plist')))
+            .then(() => rm(path.join(home, 'Library/LaunchAgents/com.gxg.pi-tunnel.plist')))
         : process.platform === 'win32'
           ? run('schtasks', ['/Delete', '/TN', 'pi-tunnel', '/F'])
           : run('systemctl', ['--user', 'stop', 'pi-tunnel-cli'])

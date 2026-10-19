@@ -106,6 +106,7 @@ function persistCmd(os) {
 			'mkdir -p ~/pi-agent/node_modules && tar xzf ~/pi-agent.tgz -C ~/pi-agent/node_modules && rm -f ~/pi-agent.tgz',
 			'mkdir -p ~/Library/LaunchAgents',
 		'launchctl bootout gui/$(id -u)/com.pi-tunnel.cli 2>/dev/null',
+		'launchctl bootout gui/$(id -u)/com.gxg.pi-tunnel 2>/dev/null', // 历史版本 label（旧设备实装名），重装时一并卸掉防双服务并存
 		'cat > ~/Library/LaunchAgents/com.pi-tunnel.cli.plist <<PLIST',
 		'<?xml version="1.0" encoding="UTF-8"?>',
 		'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
