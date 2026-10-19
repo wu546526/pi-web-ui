@@ -207,6 +207,7 @@ const ctrlSrv = http.createServer((req, res) => {
         } catch {}
         if (!prompt.trim()) return json(res, 400, { error: 'prompt 为空' });
         if (!/^[a-z_,*+.-]+$/i.test(tools)) return json(res, 400, { error: 'tools 非法' });
+        if (!piPath) piPath = detectPiSync(); // 懒重试：安装发生在启动后（如常驻命令装 pi）也能被 /task 发现
         if (!piPath) return json(res, 400, { error: '设备未安装 pi agent（更新常驻命令以安装）' });
         if (taskBusy) return json(res, 429, { error: '已有任务在执行（设备端串行）' });
         const allowEnv = {};
@@ -218,6 +219,7 @@ const ctrlSrv = http.createServer((req, res) => {
         // pi 不认 OPENAI_BASE_URL env：模型配置走专用目录 models.json（PI_CODING_AGENT_DIR 指过去，不碰设备用户配置）
         const agentDir = path.join(homedir(), '.pi-tunnel-agent');
         const spawnEnv = { ...process.env, ...allowEnv };
+        spawnEnv.PATH = path.dirname(process.execPath) + path.delimiter + (spawnEnv.PATH || ''); // shim shebang env node 在 launchd 精简 PATH 下找不到，前插 node 目录
         if (model && allowEnv.OPENAI_BASE_URL && allowEnv.OPENAI_API_KEY) {
           try {
             fs.mkdirSync(agentDir, { recursive: true });
@@ -355,23 +357,37 @@ setInterval(() => {
   }
 }, 5000);
 
+// pi 探测：launchd PATH 精简，which/npm 不可用——从当前 node 路径推导（npm global bin 与 node 同目录是主流形态）
+function detectPiSync() {
+  const nodeDir = path.dirname(process.execPath);
+  const candidates = [
+    path.join(nodeDir, process.platform === 'win32' ? 'pi.cmd' : 'pi'),
+    path.join(homedir(), 'pi-agent/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js'),
+  ];
+  for (const c of candidates) {
+    try { fs.accessSync(c, fs.constants.X_OK); return c; } catch {}
+  }
+  return '';
+}
 // 先起控制服务，再连隧道（hello 需要 ctrlPort）；顺便探测 pi agent 路径
 (async () => {
   const tryRun = (cmd, args) => new Promise(r => execFile(cmd, args, { timeout: 5000 }, (e, so) => r(e ? '' : String(so).trim())));
   try {
     let p = await tryRun('which', ['pi']);
     if (!p && process.platform === 'win32') p = (await tryRun('where', ['pi'])).split('\n')[0].trim();
-    if (!p) { // mini 离线包装形态：~/pi-agent/node_modules/...（node 直跑 cli.js）
-      const cand = path.join(homedir(), 'pi-agent/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js');
-      try { fs.accessSync(cand, fs.constants.X_OK); p = cand; } catch {}
-    }
     if (!p && process.platform !== 'win32') {
-      const prefix = await tryRun('npm', ['prefix', '-g']);
-      if (prefix) {
-        const cand = prefix + '/bin/pi';
-        try { fs.accessSync(cand, fs.constants.X_OK); p = cand; } catch {}
-      }
+      const npmAbs = path.join(path.dirname(process.execPath), 'npm'); // launchd 下 npm 用绝对路径（与 node 同目录）
+      try {
+        fs.accessSync(npmAbs, fs.constants.X_OK);
+        const prefix = await tryRun(npmAbs, ['prefix', '-g']);
+        if (prefix) {
+          const cand = prefix + '/bin/pi';
+          try { fs.accessSync(cand, fs.constants.X_OK); p = cand; } catch {}
+        }
+      } catch {}
     }
+    if (!p) p = detectPiSync();
+    piPath = p || '';
     piPath = p || '';
   } catch { piPath = ''; }
   if (piPath) console.log(`[pi] agent 就绪: ${piPath}`);
