@@ -16,7 +16,7 @@ const argSrv = process.argv.slice(2).find(a => /^wss?:\/\//.test(a)); // 只认 
 const SERVER = argSrv || '{{SERVER}}';
 const TOKEN  = process.env.PI_TUNNEL_TOKEN || '{{TOKEN}}';
 const sockMap = new Map();
-const CLI_VER = 'p4'; // 能力版本：server 据此识别旧版 CLI（无 ver 字段）并快速提示升级
+const CLI_VER = 'p5'; // 能力版本：server 据此识别旧版 CLI（无 ver 字段）并快速提示升级
 const CFG_FILE = path.join(homedir(), '.pi-tunnel-cli.json');
 
 if (typeof WebSocket === 'undefined') {
@@ -151,6 +151,44 @@ const ctrlSrv = http.createServer((req, res) => {
         audit('fs.browse', raw);
         return json(res, 200, { path: p, parent: path.dirname(p), home: homedir(), dirs });
       } catch (e) { audit('fs.browse.denied', raw); return json(res, 400, { error: String(e.code || e.message || e) }); }
+    }
+    if (u.pathname === '/sys/hw') { // 硬件概览：只读系统命令+os 内建（型号/磁盘等，无敏感数据，审计覆盖）
+      audit('sys.hw', '');
+      const run = (cmd, args) => new Promise(r => execFile(cmd, args, { timeout: 5000 }, (e, so) => r(e ? '' : String(so).trim())));
+      const dfRoot = async () => {
+        const df = await run('df', ['-k', '/']);
+        const l2 = (df.split('\n')[1] || '').trim().split(/\s+/);
+        const total = +l2[1], avail = +l2[3];
+        return total ? `已用 ${((total - avail) / 1048576).toFixed(0)}/${(total / 1048576).toFixed(0)} GB` : '';
+      };
+      (async () => {
+        const plat = process.platform;
+        const cpus = os.cpus();
+        let model = '', osv = '', disk = '';
+        try {
+          if (plat === 'darwin') {
+            model = await run('sysctl', ['-n', 'hw.model']);
+            osv = 'macOS ' + await run('sw_vers', ['-productVersion']);
+            disk = await dfRoot();
+          } else if (plat === 'linux') {
+            model = await run('cat', ['/sys/class/dmi/id/product_name']);
+            osv = (await run('cat', ['/etc/os-release']).then(s => (s.match(/PRETTY_NAME="(.*)"/) || [])[1])) || os.release();
+            disk = await dfRoot();
+          } else {
+            model = (await run('wmic', ['csproduct', 'get', 'name']).then(s => (s || '').split('\n').map(l => l.trim()).filter(Boolean)[1])) || '';
+            osv = 'Windows ' + os.release();
+          }
+        } catch {}
+        return json(res, 200, {
+          model, osv, arch: os.arch(),
+          cpu: (cpus[0]?.model || '').trim() || plat,
+          cores: cpus.length,
+          memGB: Math.round(os.totalmem() / 1073741824 * 10) / 10,
+          disk, uptimeH: Math.round(os.uptime() / 360) / 10,
+          load: os.loadavg().map(n => Math.round(n * 100) / 100),
+        });
+      })();
+      return;
     }
     if (u.pathname === '/devices') {
       audit('devices.enum', os.platform());

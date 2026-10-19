@@ -431,6 +431,15 @@ export default {
 					res.end(JSON.stringify({ ok: true }));
 				}
 			});
+			const offHw = host.route('POST', '/device/hw', async (req, res) => { // P4+: 查看设备硬件概览（只读）
+				{
+					const j = await readBodyJson(req);
+					const id = String(j.id ?? '');
+					const d = id ? await deviceCtrl(id, '/sys/hw') : { status: 400, body: { error: '缺少设备 id' } };
+					res.setHeader('content-type', 'application/json');
+					res.end(JSON.stringify(d.body));
+				}
+			});
 			const offAudit = host.route('GET', '/audit', (_req, res) => {
 			res.setHeader('content-type', 'application/json');
 			res.end(JSON.stringify({ items: auditRing.slice(-100).reverse() }));

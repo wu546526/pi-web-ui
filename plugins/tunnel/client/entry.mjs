@@ -185,6 +185,13 @@ export default defineView({
 			'</div>',
 			'</div>',
 			'</div>',
+			// P4+: 硬件概览 modal（默认隐藏）
+			'<div class="tnl-bm" id="tnl-hw" style="display:none">',
+			'<div class="tnl-bm-card">',
+			'<div class="tnl-bm-head"><b>硬件概览</b><button class="tnl-btn sm" id="tnl-hw-x">关闭</button></div>',
+			'<pre id="tnl-hw-body" class="tnl-bm-path" style="margin:14px;white-space:pre-wrap;font-size:12.5px;line-height:1.9">加载中…</pre>',
+			'</div>',
+			'</div>',
 			'</div>',
 		].join('\n');
 		el.insertAdjacentHTML('beforeend', H);
@@ -223,6 +230,10 @@ export default defineView({
 				openBrowse(b.dataset.id);
 				return;
 			}
+			if (b.classList.contains('tnl-cfg-hw')) { // P4+: 打开硬件概览
+				openHw(b.dataset.id);
+				return;
+			}
 			try { await fetch('/plugins-api/tunnel/agent/select', { method: 'POST', body: JSON.stringify({ id: b.dataset.id }) }); } catch {}
 			refresh();
 		});
@@ -259,6 +270,27 @@ export default defineView({
 				$('#tnl-bm').style.display = 'flex';
 				browseTo('~');
 			}
+			// ── P4+: 硬件概览 ─────────
+			async function openHw(id) {
+				$('#tnl-hw').style.display = 'flex';
+				$('#tnl-hw-body').textContent = '加载中…';
+				try {
+					const r = await fetch('/plugins-api/tunnel/device/hw', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id }) });
+					const d = await r.json();
+					if (d.error) { $('#tnl-hw-body').textContent = d.error; return; }
+					$('#tnl-hw-body').textContent = [
+						'型号     ' + (d.model || '—'),
+						'系统     ' + (d.osv || '—') + ' (' + d.arch + ')',
+						'CPU      ' + (d.cpu || '—') + ' × ' + d.cores,
+						'内存     ' + d.memGB + ' GB',
+						'根分区   ' + (d.disk || '—'),
+						'运行时长 ' + d.uptimeH + ' 小时',
+						'负载     ' + (d.load || []).join(' / '),
+					].join('\n');
+				} catch { $('#tnl-hw-body').textContent = '查询失败'; }
+			}
+			$('#tnl-hw-x').onclick = () => { $('#tnl-hw').style.display = 'none'; };
+			$('#tnl-hw').addEventListener('click', e => { if (e.target.id === 'tnl-hw') $('#tnl-hw').style.display = 'none'; });
 			$('#tnl-bm-x').onclick = () => { $('#tnl-bm').style.display = 'none'; };
 			$('#tnl-bm').addEventListener('click', e => { if (e.target.id === 'tnl-bm') $('#tnl-bm').style.display = 'none'; });
 			$('#tnl-bm-list').addEventListener('click', e => {
@@ -313,6 +345,7 @@ export default defineView({
 					'<label><input type="checkbox" class="tnl-cfg-fsw" ' + (caps.fsWrite ? 'checked' : '') + '> 文件写</label>',
 					'<input class="tnl-wl" value="' + esc((caps.whitelist ?? []).join(', ')) + '" placeholder="白名单目录（逗号分隔）">',
 					'<span class="tnl-btnrow">',
+					'<button class="tnl-btn sm tnl-cfg-hw" data-id="' + esc(x.id) + '">硬件</button>',
 					'<button class="tnl-btn sm tnl-cfg-browse" data-id="' + esc(x.id) + '">浏览…</button>',
 					'<button class="tnl-btn sm primary tnl-cfg-save" data-id="' + esc(x.id) + '">保存配置</button>',
 					'<button class="tnl-btn sm danger tnl-cfg-uninst" data-id="' + esc(x.id) + '">卸载</button>',
