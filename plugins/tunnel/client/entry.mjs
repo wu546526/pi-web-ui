@@ -184,12 +184,12 @@ export default defineView({
 			if (b.classList.contains('tnl-cfg-save')) {
 				const wrap = b.closest('.tnl-cfg');
 				const wl = (wrap.querySelector('.tnl-wl').value || '').split(/[\n,，]+/).map(s => s.trim()).filter(Boolean);
-				try { await fetch('/plugins-api/tunnel/agent/config', { method: 'POST', body: JSON.stringify({ id: b.dataset.id, whitelist: wl }) }); } catch {}
+				try { await fetch('/plugins-api/tunnel/agent/config', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: b.dataset.id, whitelist: wl }) }); } catch {}
 				return;
 			}
 			if (b.classList.contains('tnl-cfg-uninst')) { // P4: 卸载该设备 CLI（停常驻+删文件）
 				if (!confirm('确定卸载该设备上的隧道 CLI？\n将停止常驻服务并删除 CLI 文件，设备将从列表消失。')) return;
-				try { await fetch('/plugins-api/tunnel/device/uninstall', { method: 'POST', body: JSON.stringify({ id: b.dataset.id }) }); } catch {}
+				try { await fetch('/plugins-api/tunnel/device/uninstall', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: b.dataset.id }) }); } catch {}
 				setTimeout(refresh, 2500);
 				return;
 			}
@@ -208,7 +208,7 @@ export default defineView({
 				const patch = { id: wrap.dataset.id };
 				if (cb.classList.contains('tnl-cfg-fsr')) patch.fsRead = cb.checked;
 				if (cb.classList.contains('tnl-cfg-fsw')) patch.fsWrite = cb.checked;
-				try { await fetch('/plugins-api/tunnel/agent/config', { method: 'POST', body: JSON.stringify(patch) }); } catch {}
+				try { await fetch('/plugins-api/tunnel/agent/config', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }); } catch {}
 			});
 
 			// ── P4: 目录选择器（经隧道逐级浏览设备目录，选中后追加到白名单输入框） ─────────
@@ -217,7 +217,7 @@ export default defineView({
 			async function browseTo(p) {
 				$('#tnl-bm-list').textContent = '加载中…';
 				try {
-					const r = await fetch('/plugins-api/tunnel/device/fs', { method: 'POST', body: JSON.stringify({ id: browseId, path: p }) });
+					const r = await fetch('/plugins-api/tunnel/device/fs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: browseId, path: p }) });
 					const d = await r.json();
 					if (d.error) { $('#tnl-bm-list').textContent = d.error; return; }
 					browseAbs = d.path; browseHome = d.home || '/';
