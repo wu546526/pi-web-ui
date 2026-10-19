@@ -9,7 +9,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { execFile, execFileSync } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { homedir } from 'node:os';
 
 const argSrv = process.argv.slice(2).find(a => /^wss?:\/\//.test(a)); // 只认 ws(s):// 形态, 防 zsh 粘贴行内注释垃圾参数
@@ -240,10 +240,16 @@ const ctrlSrv = http.createServer((req, res) => {
         const cmd = isJs ? process.execPath : piPath;
         const runArgs = isJs ? [piPath, ...args] : args;
         const t0 = Date.now();
-        execFile(cmd, runArgs, { timeout: timeoutS * 1000, maxBuffer: 4 * 1024 * 1024, env: spawnEnv, cwd: homedir() }, (e, so, se) => { // cwd 固定主目录：launchd 下默认 / 会导致 pi 产物落点失控
-          taskBusy = false;
-          json(res, e && !so ? 500 : 200, { ok: !e || !!so, ms: Date.now() - t0, output: String(so || '').slice(-40000), err: String(se || '').slice(-500) });
-        });
+        // execFile 与 pi 不兼容（20261019 A-F 组实测：execFile 稳定挂死、spawn 正常）——改 spawn + 手动超时收割
+        const child = spawn(cmd, runArgs, { env: spawnEnv, cwd: homedir(), stdio: ['ignore', 'pipe', 'pipe'] }); // cwd 固定主目录：launchd 下默认 / 会导致 pi 产物落点失控
+        let outBuf = '', errBuf = '';
+        child.stdout.on('data', d => { outBuf += d; if (outBuf.length > 2e6) outBuf = outBuf.slice(-1e6); });
+        child.stderr.on('data', d => { errBuf += d; if (errBuf.length > 4e5) errBuf = errBuf.slice(-2e5); });
+        const killT = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, timeoutS * 1000);
+        let settled = false;
+        const finish = (ok) => { if (settled) return; settled = true; clearTimeout(killT); taskBusy = false; json(res, ok ? 200 : 500, { ok, ms: Date.now() - t0, output: outBuf.slice(-40000), err: errBuf.slice(-500) }); };
+        child.on('exit', () => finish(!!outBuf));
+        child.on('error', () => finish(false));
       });
       return;
     }
