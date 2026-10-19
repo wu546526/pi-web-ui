@@ -362,6 +362,7 @@ function detectPiSync() {
   const nodeDir = path.dirname(process.execPath);
   const candidates = [
     path.join(nodeDir, process.platform === 'win32' ? 'pi.cmd' : 'pi'),
+    '/usr/local/bin/pi', '/opt/homebrew/bin/pi', // 系统 npm prefix 标准位（双 node 并存时 launchd node 与用户 npm 异源）
     path.join(homedir(), 'pi-agent/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js'),
   ];
   // npm prefix -g（npm 与 node 不同目录的形态，如 pnpm/nvm/自定义 prefix）：npm 用绝对路径（launchd PATH 精简）
