@@ -9,7 +9,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 
 const argSrv = process.argv.slice(2).find(a => /^wss?:\/\//.test(a)); // 只认 ws(s):// 形态, 防 zsh 粘贴行内注释垃圾参数
@@ -364,6 +364,14 @@ function detectPiSync() {
     path.join(nodeDir, process.platform === 'win32' ? 'pi.cmd' : 'pi'),
     path.join(homedir(), 'pi-agent/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js'),
   ];
+  // npm prefix -g（npm 与 node 不同目录的形态，如 pnpm/nvm/自定义 prefix）：npm 用绝对路径（launchd PATH 精简）
+  try {
+    const npmAbs = path.join(nodeDir, process.platform === 'win32' ? 'npm.cmd' : 'npm');
+    if (fs.existsSync(npmAbs)) {
+      const prefix = execFileSync(npmAbs, ['prefix', '-g'], { timeout: 5000 }).toString().trim();
+      if (prefix) candidates.push(path.join(prefix, process.platform === 'win32' ? 'pi.cmd' : 'pi'));
+    }
+  } catch {}
   for (const c of candidates) {
     try { fs.accessSync(c, fs.constants.X_OK); return c; } catch {}
   }
