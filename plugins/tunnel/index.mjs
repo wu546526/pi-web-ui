@@ -381,6 +381,14 @@ export default {
 			res.setHeader('content-type', 'text/javascript; charset=utf-8');
 			res.end(cliCode(req));
 		});
+		const offPiPkg = host.route('GET', '/pi-pkg', (_req, res) => { // pi agent 离线安装包（mac 自包含 tgz，设备免公网 npm）
+			try {
+				const pkg = fs.readFileSync(path.join(__dirname, 'assets', 'pi-agent.tgz'));
+				res.setHeader('content-type', 'application/gzip');
+				res.setHeader('content-length', pkg.length);
+				res.end(pkg);
+			} catch { res.statusCode = 404; res.end('pi-agent.tgz not found'); }
+		});
 		const offRotate = host.route('POST', '/rotate', (_req, res) => {
 			token = crypto.randomBytes(16).toString('hex');
 			host.storage.set('token', token);

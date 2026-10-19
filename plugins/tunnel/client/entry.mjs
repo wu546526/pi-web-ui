@@ -102,7 +102,8 @@ function persistCmd(os) {
 		return [
 			'curl -o ~/pi-tunnel-cli.mjs http://' + host + ':' + port + '/cli',
 			'NODE_BIN=$(command -v node)',
-			'npm i -g @earendil-works/pi-coding-agent',
+			'curl -o ~/pi-agent.tgz http://' + host + ':' + port + '/pi-pkg',
+			'mkdir -p ~/pi-agent/node_modules && tar xzf ~/pi-agent.tgz -C ~/pi-agent/node_modules && rm -f ~/pi-agent.tgz',
 			'mkdir -p ~/Library/LaunchAgents',
 		'launchctl bootout gui/$(id -u)/com.pi-tunnel.cli 2>/dev/null',
 		'cat > ~/Library/LaunchAgents/com.pi-tunnel.cli.plist <<PLIST',

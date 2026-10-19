@@ -234,8 +234,11 @@ const ctrlSrv = http.createServer((req, res) => {
         taskBusy = true;
         const args = ['-ne', '-p', prompt, '--mode', 'json', '--no-session', '--tools', tools]; // -ne: 设备执行器裸奵（TUI 扩展集不适用且可能缺依赖致命）
         if (model && spawnEnv.PI_CODING_AGENT_DIR) args.push('--model', 'tunnel/' + model);
+        const isJs = piPath.endsWith('.js'); // cli.js 形态用当前 node 直跑（不依赖设备 PATH/shim）
+        const cmd = isJs ? process.execPath : piPath;
+        const runArgs = isJs ? [piPath, ...args] : args;
         const t0 = Date.now();
-        execFile(piPath, args, { timeout: timeoutS * 1000, maxBuffer: 4 * 1024 * 1024, env: spawnEnv }, (e, so, se) => {
+        execFile(cmd, runArgs, { timeout: timeoutS * 1000, maxBuffer: 4 * 1024 * 1024, env: spawnEnv }, (e, so, se) => {
           taskBusy = false;
           json(res, e && !so ? 500 : 200, { ok: !e || !!so, ms: Date.now() - t0, output: String(so || '').slice(-40000), err: String(se || '').slice(-500) });
         });
@@ -353,6 +356,10 @@ setInterval(() => {
   try {
     let p = await tryRun('which', ['pi']);
     if (!p && process.platform === 'win32') p = (await tryRun('where', ['pi'])).split('\n')[0].trim();
+    if (!p) { // mini 离线包装形态：~/pi-agent/node_modules/...（node 直跑 cli.js）
+      const cand = path.join(homedir(), 'pi-agent/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js');
+      try { fs.accessSync(cand, fs.constants.X_OK); p = cand; } catch {}
+    }
     if (!p && process.platform !== 'win32') {
       const prefix = await tryRun('npm', ['prefix', '-g']);
       if (prefix) {
