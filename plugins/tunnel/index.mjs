@@ -100,6 +100,7 @@ export default {
 			const rid = `r${++ctrlSeq}`;
 			const timer = setTimeout(() => { state.ctrlPending.delete(rid); resolve({ status: 504, body: { error: '设备响应超时' } }); }, timeoutMs);
 			state.ctrlPending.set(rid, { resolve: v => { clearTimeout(timer); resolve(v); } });
+			console.log(`[tunnel] ctrl → ${aid} ${url} ready=1`);
 			toAgent(aid, { t: 'ctrl', rid, url });
 		});
 		// C 档 P1：审计环 + 设备能力配置（按 name 持久化，重连不丢授权）
@@ -133,7 +134,7 @@ export default {
 		const lanIp = detectLanIp(); // 面板生成常驻命令用（网络变化随插件重载自动更新）
 		const statusSnapshot = () => ({
 			running,
-			rev: 'c1-p1', // 代码版本标记：reload 后可观测新代码是否激活
+			rev: 'c1-p2', // 代码版本标记：reload 后可观测新代码是否激活
 			lanIp,
 			agentOnline: !!activeAgent(), // 兼容旧面板语义：当前出口在线
 			activeAgentId: state.activeAgentId,
@@ -235,6 +236,7 @@ export default {
 							break;
 						case 'close': if (e) { e.c.destroy(); state.conns.delete(m.id); } break;
 						case 'ctrl-resp': { // P4: 设备控制响应回给等待中的面板请求
+							console.log(`[tunnel] ctrl-resp rid=${m.rid} status=${m.status}`);
 							const p = state.ctrlPending.get(m.rid);
 							if (p) { state.ctrlPending.delete(m.rid); p.resolve({ status: m.status ?? 500, body: m.body ?? {} }); }
 							break;
