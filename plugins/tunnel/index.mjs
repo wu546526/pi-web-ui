@@ -170,7 +170,7 @@ export default {
 		const lanIp = detectLanIp(); // 面板生成常驻命令用（网络变化随插件重载自动更新）
 		const statusSnapshot = () => ({
 			running,
-			rev: 'c1-p2', // 代码版本标记：reload 后可观测新代码是否激活
+			rev: 'c1-p3', // 代码版本标记：reload 后可观测新代码是否激活
 			lanIp,
 			agentOnline: !!activeAgent(), // 兼容旧面板语义：当前出口在线
 			activeAgentId: state.activeAgentId,
