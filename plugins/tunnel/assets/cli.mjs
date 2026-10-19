@@ -213,6 +213,7 @@ const ctrlSrv = http.createServer((req, res) => {
         for (const k of ['OPENAI_BASE_URL', 'OPENAI_API_KEY', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN']) {
           if (typeof env[k] === 'string' && env[k]) allowEnv[k] = env[k];
         }
+        console.log(`[task] 收到 prompt=${!!prompt} tools=${tools} model=${model || '-'} envKeys=${Object.keys(env).join(',') || '-'} allow=${Object.keys(allowEnv).join(',') || '-'}`);
         audit('task.run', `${tools} | ${prompt.slice(0, 60)}`);
         // pi 不认 OPENAI_BASE_URL env：模型配置走专用目录 models.json（PI_CODING_AGENT_DIR 指过去，不碰设备用户配置）
         const agentDir = path.join(homedir(), '.pi-tunnel-agent');
@@ -223,7 +224,8 @@ const ctrlSrv = http.createServer((req, res) => {
             const mj = { providers: { tunnel: { baseUrl: allowEnv.OPENAI_BASE_URL, api: 'openai-completions', apiKey: allowEnv.OPENAI_API_KEY, models: [{ id: model }] } } };
             fs.writeFileSync(path.join(agentDir, 'models.json'), JSON.stringify(mj, null, 2), { mode: 0o600 });
             spawnEnv.PI_CODING_AGENT_DIR = agentDir;
-          } catch {}
+            console.log('[task] models.json 已写入', agentDir);
+          } catch (e) { console.log('[task] models.json 写失败:', e.message); }
         }
         taskBusy = true;
         const args = ['-ne', '-p', prompt, '--mode', 'json', '--no-session', '--tools', tools]; // -ne: 设备执行器裸奵（TUI 扩展集不适用且可能缺依赖致命）
