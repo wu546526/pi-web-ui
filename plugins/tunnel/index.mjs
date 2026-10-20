@@ -112,7 +112,7 @@ export default {
 			state.ctrlPending.set(rid, { resolve: v => { clearTimeout(timer); resolve(v); } });
 			toAgent(aid, { t: 'ctrl', rid, url, method: opts.method || 'GET', body: opts.body });
 		});
-		// 模型三元组跟随：设备 pi 用 pi-web-ui 当前会话模型（wildwork 网关）；解析失败返回 null，由面板手动兑底
+		// 模型三元组跟随：设备 pi 用 pi-web-ui 当前会话模型（自定义网关 provider 时桥接到对应网关）；解析失败返回 null，由面板手动兑底
 		const resolveModelEnv = () => {
 			try {
 				const manual = host.storage.get('modelEnv');
@@ -367,7 +367,7 @@ export default {
 		// 心跳 + 半开检测：ping 后未回 pong 的连接判定为僵尸（进程退出未挥手/网络半开），
 		// terminate 触发 close → 从设备表移除（否则假在线残留，SOCKS 全部空响应，20261019 实战根因）
 		const heartbeat = setInterval(() => {
-			for (const [aid, a] of state.agents) {
+			for (const [, a] of state.agents) {
 				if (a.ws.readyState !== 1) continue;
 				if (a.isAlive === false) {
 					try { a.ws.terminate(); } catch {}
@@ -388,7 +388,7 @@ export default {
 			res.setHeader('content-type', 'text/javascript; charset=utf-8');
 			res.end(cliCode(req));
 		});
-		const offPiPkg = host.route('GET', '/pi-pkg', (_req, res) => { // pi agent 离线安装包（mac 自包含 tgz，设备免公网 npm）
+		const _offPiPkg = host.route('GET', '/pi-pkg', (_req, res) => { // pi agent 离线安装包（mac 自包含 tgz，设备免公网 npm）
 			try {
 				const pkg = fs.readFileSync(path.join(__dirname, 'assets', 'pi-agent.tgz'));
 				res.setHeader('content-type', 'application/gzip');
@@ -454,7 +454,7 @@ export default {
 				res.end(JSON.stringify({ ok: true, name: nm, config: next, pending: !a }));
 			}
 		});
-			const offDeviceFs = host.route('POST', '/device/fs', async (req, res) => { // P4: 面板浏览设备目录（选白名单路径用）
+			const _offDeviceFs = host.route('POST', '/device/fs', async (req, res) => { // P4: 面板浏览设备目录（选白名单路径用）
 				{
 					const j = await readBodyJson(req);
 					const id = String(j.id ?? ''), p = String(j.path || '~');
@@ -463,7 +463,7 @@ export default {
 					res.end(JSON.stringify(d.body));
 				}
 			});
-			const offUninstall = host.route('POST', '/device/uninstall', async (req, res) => { // P4: 面板下发 CLI 自卸载
+			const _offUninstall = host.route('POST', '/device/uninstall', async (req, res) => { // P4: 面板下发 CLI 自卸载
 				{
 					const j = await readBodyJson(req);
 					const id = String(j.id ?? '');
@@ -475,7 +475,7 @@ export default {
 					res.end(JSON.stringify({ ok: true }));
 				}
 			});
-			const offHw = host.route('POST', '/device/hw', async (req, res) => { // P4+: 查看设备硬件概览（只读）
+			const _offHw = host.route('POST', '/device/hw', async (req, res) => { // P4+: 查看设备硬件概览（只读）
 				{
 					const j = await readBodyJson(req);
 					const id = String(j.id ?? '');
@@ -484,7 +484,7 @@ export default {
 					res.end(JSON.stringify(d.body));
 				}
 			});
-			const offTask = host.route('POST', '/device/task', async (req, res) => { // P4-B: 通用任务通道（指挥设备 pi agent）
+			const _offTask = host.route('POST', '/device/task', async (req, res) => { // P4-B: 通用任务通道（指挥设备 pi agent）
 				{
 					const j = await readBodyJson(req);
 					const id = String(j.id ?? '');

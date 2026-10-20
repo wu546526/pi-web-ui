@@ -333,7 +333,7 @@ function connect() {
       const rm = f => { try { fs.rmSync(f, { force: true, recursive: true }); } catch {} };
       const stopPersist = process.platform === 'darwin'
         ? run('launchctl', ['bootout', `gui/${process.getuid()}/com.pi-tunnel.cli`])
-            .then(() => run('launchctl', ['bootout', `gui/${process.getuid()}/com.gxg.pi-tunnel`])) // 历史版本 label（旧设备实装名），双 label 都卸
+            .then(() => run('launchctl', ['bootout', `gui/${process.getuid()}/com.gxg.pi-tunnel`])) // 历史版本 label，双 label 都卸
             .then(() => rm(path.join(home, 'Library/LaunchAgents/com.pi-tunnel.cli.plist')))
             .then(() => rm(path.join(home, 'Library/LaunchAgents/com.gxg.pi-tunnel.plist')))
         : process.platform === 'win32'
@@ -385,7 +385,7 @@ function detectPiSync() {
   const candidates = [
     path.join(nodeDir, process.platform === 'win32' ? 'pi.cmd' : 'pi'),
     '/usr/local/bin/pi', '/opt/homebrew/bin/pi', // 系统 npm prefix 标准位（双 node 并存时 launchd node 与用户 npm 异源）
-    path.join(homedir(), '.local/bin/pi'), // pnpm/自装形态（实测 WDLMacBook：/Users/<user>/.local/bin/pi）
+    path.join(homedir(), '.local/bin/pi'), // pnpm/自装形态（实测某设备：~/.local/bin/pi）
     path.join(homedir(), 'pi-agent/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js'),
   ];
   // npm prefix -g（npm 与 node 不同目录的形态，如 pnpm/nvm/自定义 prefix）：npm 用绝对路径（launchd PATH 精简）
