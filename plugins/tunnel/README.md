@@ -67,3 +67,13 @@ tunnel_fetch {url: "http://192.168.x.1/", timeout: 5}  # 探测出口设备所�
 - 源码结构：`manifest.json` + `index.mjs`（服务端，全内联）+ `client/entry.mjs`（面板）
   + `assets/cli.mjs`（设备侧 CLI 模板，`/cli` 下载时注入令牌与地址）+ `client/sdk/`（SDK 拷贝）
 - 服务端改动后需向宿主发 `plugins_reload`（浏览器刷新只更新面板，不重载服务端）
+
+## 更新日志
+
+### 1.1.0（2026-10-20）
+
+- **连接自愈**：CLI ↔ 服务端 25s 应用层心跳，TCP 半开（笔记本休眠/NAT 空闲超时）约 35s 内自动重连，不再需要手动重启常驻服务
+- **pi agent 探测增强**：launchd 精简 PATH 下按 node 同目录 / 系统 npm prefix / ~/.local/bin / 离线包四重定位
+- **任务通道修复**：pi 子进程改用 spawn（execFile 会丢弃 stdio 选项导致 pi 等待 stdin EOF 挂死）
+- **面板视觉梳理**：设备行版本徽章、离线弱化、配置按钮分组、任务结果徽章化、审计四列对齐
+- **卸载加固**：历史版本 label 与现行 label 双兼容卸载，防双服务并存
