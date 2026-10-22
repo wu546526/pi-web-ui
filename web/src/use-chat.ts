@@ -57,7 +57,9 @@ import type {
 import { applyMessageDelta, type MessageDeltaMsg } from "./message-delta";
 import {
 	createOptimisticQueueTracker,
+	reconcileOptimisticPromptEchoes,
 	reconcileOptimisticQueue,
+	recordOptimisticPromptEcho,
 	recordOptimisticQueueAdd,
 	recordOptimisticQueueRemove,
 	rollbackUnconfirmedOptimisticAdds,

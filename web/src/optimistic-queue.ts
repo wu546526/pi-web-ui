@@ -618,9 +618,12 @@ export function reconcileOptimisticPromptEchoes(
 			staleEchoIds.add(echo.messageId);
 			continue;
 		}
-		// 未落账 → 保留跟踪并追加气泡到列表尾
+		// 未落账 → 保留跟踪；若本地气泡已在列表中（delta 合并场景）原位保留，否则追加到列表尾。
+		// 不查重直接追加会导致 delta 帧上出现重复气泡。
 		keptEchoes.push(echo);
-		appendEchoes.push(buildEchoMessage(echo, echo.createdAt));
+		if (!incomingState.messages.some((m) => m.id === echo.messageId)) {
+			appendEchoes.push(buildEchoMessage(echo, echo.createdAt));
+		}
 	}
 
 	const nextTracker =
