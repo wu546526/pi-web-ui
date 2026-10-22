@@ -12,19 +12,34 @@
  * 设计：
  * - 发送流式 `prompt` 时：立即用与服务端同构的 `formatStreamingPrompt` 生成乐观项并追加到 `state.queue`；
  * - 发送 `queue_remove` 时：立即从 `state.queue` 移除对应项；
+ * - 发送空闲态 `prompt` 时：立即在消息列表尾部本地回显用户气泡（echo- 前缀 id，
+ *   recordOptimisticPromptEcho），快照对账落账（reconcileOptimisticPromptEchoes）、
+ *   TTL 超时或通知回滚三方消解，消除空闲发送到服务端回包之间的「消息凭空消失」真空期；
  * - 收到服务端 `snapshot` / `snapshot_delta` 时：通过基线计数（baselineMatches）精确判定服务端是否已落账，
  *   未落账前保持乐观态不闪烁，落账后无缝交接给服务端权威队列，绝不产生重复气泡。
  */
 
-import type { PromptAttachment } from "../../server/protocol.js";
+import type { PromptAttachment, UiContentBlock, UiMessage, UiState } from "./types";
 import { removeQueuedByIndexOrText } from "../../server/queue-utils.js";
 import { formatStreamingPrompt, readTextQuote, splitQuotedPrompt } from "../../server/text-quote.js";
-import type { UiMessage, UiState } from "./types";
 
 /** 乐观入队项最长保活时间（毫秒）：覆盖大图视觉桥转述等慢速前置阶段，超时自动释放。 */
 export const OPTIMISTIC_ADD_TTL_MS = 15_000;
 /** 乐观移除项最长保活时间（毫秒）：仅用于抵消在途旧 snapshot_delta 的闪回。 */
 export const OPTIMISTIC_REMOVE_TTL_MS = 3_000;
+/** 空闲态回显气泡最长保活时间（毫秒）：覆盖大会话快照序列化与慢附件前置，超时自动移除。 */
+export const OPTIMISTIC_ECHO_TTL_MS = 15_000;
+/** 本地回显气泡的消息 id 前缀：真实服务端消息 id（u-/a-/t-）永不以此开头。 */
+export const OPTIMISTIC_ECHO_ID_PREFIX = "echo-";
+
+/** 本地回显气泡消息 id（echo-<seq>），与真实服务端消息 id 空间隔离，永不碰撞。 */
+export function makeEchoMessageId(seq: number): string {
+	return `${OPTIMISTIC_ECHO_ID_PREFIX}${seq}`;
+}
+
+export function isEchoMessageId(id: string | undefined): boolean {
+	return typeof id === "string" && id.startsWith(OPTIMISTIC_ECHO_ID_PREFIX);
+}
 
 export interface PendingQueueAdd {
 	conversationId: string;
@@ -48,13 +63,28 @@ export interface PendingQueueRemove {
 	createdAt: number;
 }
 
+/** 空闲态发送的本地回显气泡（服务端确认前暂存，确认后自动移除跟踪）。 */
+export interface PendingPromptEcho {
+	conversationId: string;
+	/** 规范化后的用户正文（trim 后），与服务端落盘消息的首个 text block 全等比较。
+	 *  服务端把附件/图片拆成独立 custom 消息，正文不含侧牌标记，回显气泡同构。 */
+	rawText: string;
+	/** 本地气泡消息 id（echo- 前缀，与真实服务端 id 空间隔离）。 */
+	messageId: string;
+	/** 发送时刻已落盘消息中同内容用户消息数量（不含回显气泡）。 */
+	baselineUserMsgMatches: number;
+	createdAt: number;
+}
+
 export interface OptimisticQueueTracker {
 	adds: PendingQueueAdd[];
 	removes: PendingQueueRemove[];
+	/** 空闲态 prompt 的本地回显气泡（echo- 前缀 id），见 recordOptimisticPromptEcho。 */
+	echoes: PendingPromptEcho[];
 }
 
 export function createOptimisticQueueTracker(): OptimisticQueueTracker {
-	return { adds: [], removes: [] };
+	return { adds: [], removes: [], echoes: [] };
 }
 
 function escapeXmlAttr(value: string): string {
@@ -130,6 +160,8 @@ export function countMatchingUserMessages(messages: readonly UiMessage[], rawTex
 	let count = 0;
 	for (const msg of messages) {
 		if (msg.role !== "user") continue;
+		// 本地回显气泡不算服务端落账：基线与确认计数都必须只统计真实落盘消息
+		if (isEchoMessageId(msg.id)) continue;
 		const textBlock = msg.content.find((b) => b.type === "text") as { type: "text"; text: string } | undefined;
 		const msgText = (textBlock?.text ?? "").trim();
 		if (msgText === norm) count += 1;
@@ -158,6 +190,93 @@ export function shouldOptimisticallyQueuePrompt(opts: {
 	if (trimmed.startsWith("/")) return false;
 	if (goalReviewing && !queue) return false;
 	return true;
+}
+
+/**
+ * 判断一条空闲态（非流式）发出的 `prompt` 是否应当立即本地回显气泡。
+ * 排除：流式态（走 shouldOptimisticallyQueuePrompt 的排队/插队路径）、空消息、
+ * 斜杠命令（结果可能直接是本地 notice，不产生用户消息）、审查者自动委派模式。
+ */
+export function shouldOptimisticallyEchoPrompt(opts: {
+	state: UiState | null;
+	text: string;
+	attachments?: readonly PromptAttachment[];
+}): boolean {
+	const { state, text, attachments } = opts;
+	if (!state || state.isStreaming) return false;
+	if (state.delegateMode === true) return false;
+	const trimmed = (text ?? "").trim();
+	const hasAttach = Boolean(attachments && attachments.length > 0);
+	if (!trimmed && !hasAttach) return false;
+	if (trimmed.startsWith("/")) return false;
+	return true;
+}
+
+/**
+ * 空闲态发送 `prompt` 时记录本地回显气泡，并返回追加了气泡的 `UiState`。
+ * 消解三路：快照对账落账（reconcileOptimisticPromptEchoes）/ TTL 超时 / 通知回滚
+ * （rollbackUnconfirmedOptimisticAdds）。
+ */
+export function recordOptimisticPromptEcho(
+	tracker: OptimisticQueueTracker,
+	state: UiState | null,
+	opts: {
+		text: string;
+		attachments?: readonly PromptAttachment[];
+		now?: number;
+	},
+): { tracker: OptimisticQueueTracker; state: UiState | null } {
+	const now = opts.now ?? Date.now();
+	if (!state || !shouldOptimisticallyEchoPrompt({ state, text: opts.text, attachments: opts.attachments })) {
+		return { tracker, state };
+	}
+
+	const rawText = (opts.text ?? "").trim();
+	const seq = nextEchoSeq(tracker);
+	const entry: PendingPromptEcho = {
+		conversationId: state.conversationId,
+		rawText,
+		messageId: makeEchoId(seq),
+		baselineUserMsgMatches: countMatchingUserMessages(state.messages, rawText),
+		createdAt: now,
+	};
+	const echoMessage = buildEchoMessage(entry, now);
+
+	return {
+		tracker: { ...tracker, echoes: [...echoesOf(tracker), entry] },
+		state: { ...state, messages: [...state.messages, echoMessage] },
+	};
+}
+
+function echoesOf(tracker: OptimisticQueueTracker): PendingPromptEcho[] {
+	// 兼容旧结构 tracker（可能缺 echoes 字段，如旧单测/持久化状态）
+	return tracker.echoes ?? [];
+}
+
+function nextEchoSeq(tracker: OptimisticQueueTracker): number {
+	let max = 0;
+	for (const e of echoesOf(tracker)) {
+		const n = Number.parseInt(e.messageId.slice(OPTIMISTIC_ECHO_ID_PREFIX.length), 10);
+		if (Number.isFinite(n) && n > max) max = n;
+	}
+	return max + 1;
+}
+
+function makeEchoId(seq: number): string {
+	return makeEchoMessageId(seq);
+}
+
+/** 构建与服务端落盘用户消息同构的本地回显气泡（纯正文文本；附件/图片由服务端拆成独立
+ *  custom 消息，落账后随快照自然出现为附件卡片，回显阶段不预渲染，避免标记泄漏）。 */
+function buildEchoMessage(entry: PendingPromptEcho, createdAt: number): UiMessage {
+	const content: UiContentBlock[] = [];
+	if (entry.rawText) content.push({ type: "text", text: entry.rawText });
+	return {
+		id: entry.messageId,
+		role: "user",
+		content,
+		timestamp: createdAt,
+	};
 }
 
 /**
@@ -225,6 +344,7 @@ export function recordOptimisticQueueAdd(
 		tracker: {
 			adds: [...tracker.adds, addEntry],
 			removes: tracker.removes,
+			echoes: echoesOf(tracker),
 		},
 		state: {
 			...state,
@@ -277,6 +397,7 @@ export function recordOptimisticQueueRemove(
 		tracker: {
 			adds: nextAdds,
 			removes: [...tracker.removes, removeEntry],
+			echoes: echoesOf(tracker),
 		},
 		state: {
 			...state,
@@ -313,7 +434,7 @@ export function reconcileOptimisticQueue(
 			return { tracker, state: incomingState };
 		}
 		return {
-			tracker: { adds: keptAdds, removes: keptRemoves },
+			tracker: { ...tracker, adds: keptAdds, removes: keptRemoves },
 			state: incomingState,
 		};
 	}
@@ -392,7 +513,7 @@ export function reconcileOptimisticQueue(
 	const nextTracker =
 		nextAdds.length === tracker.adds.length && nextRemoves.length === tracker.removes.length
 			? tracker
-			: { adds: nextAdds, removes: nextRemoves };
+			: { ...tracker, adds: nextAdds, removes: nextRemoves };
 
 	if (!queueMutated) {
 		return { tracker: nextTracker, state: incomingState };
@@ -415,10 +536,11 @@ export function rollbackUnconfirmedOptimisticAdds(
 	tracker: OptimisticQueueTracker,
 	state: UiState | null,
 ): { tracker: OptimisticQueueTracker; state: UiState | null } {
-	if (!state || tracker.adds.length === 0) return { tracker, state };
+	if (!state) return { tracker, state };
 	const convId = state.conversationId;
 	const toRollback = tracker.adds.filter((a) => a.conversationId === convId);
-	if (toRollback.length === 0) return { tracker, state };
+	const echoesToRollback = echoesOf(tracker).filter((e) => e.conversationId === convId);
+	if (toRollback.length === 0 && echoesToRollback.length === 0) return { tracker, state };
 
 	let steering = [...state.queue.steering];
 	let followUp = [...state.queue.followUp];
@@ -430,14 +552,92 @@ export function rollbackUnconfirmedOptimisticAdds(
 		}
 	}
 
+	const echoIds = new Set(echoesToRollback.map((e) => e.messageId));
+	const nextMessages = echoIds.size > 0 ? state.messages.filter((m) => !echoIds.has(m.id)) : state.messages;
+
 	return {
 		tracker: {
 			adds: tracker.adds.filter((a) => a.conversationId !== convId),
 			removes: tracker.removes,
+			echoes: echoesOf(tracker).filter((e) => e.conversationId !== convId),
 		},
 		state: {
 			...state,
 			queue: { steering, followUp },
+			messages: nextMessages,
 		},
 	};
+}
+
+/**
+ * 收到服务端权威 `snapshot` / 合并后的 `snapshot_delta` 时，与本地空闲态回显气泡对账：
+ * - 快照里已出现同正文用户消息（计数超越发送时基线）→ 服务端已落账，移除回显气泡；
+ * - 服务端尚未落账且未超 TTL → 保留回显气泡（追加到快照消息列表尾部）；
+ * - 超过 TTL → 移除回显气泡并放弃跟踪（真实消息随下一帧快照自然出现）。
+ */
+export function reconcileOptimisticPromptEchoes(
+	tracker: OptimisticQueueTracker,
+	incomingState: UiState,
+	now = Date.now(),
+): { tracker: OptimisticQueueTracker; state: UiState } {
+	if (echoesOf(tracker).length === 0) return { tracker, state: incomingState };
+	if (incomingState.isStreaming) {
+		// 流式已启动：服务端快照为权威态。本会话的回显气泡要么已被真实消息取代
+		// （全量快照整体覆盖），要么仍混在增量合并列表里（delta append）—— 统一
+		// 剥离本会话 echo- 气泡，避免幽灵残留；真实消息由快照自身携带。
+		const staleIds = new Set<string>();
+		const kept: PendingPromptEcho[] = [];
+		for (const e of echoesOf(tracker)) {
+			if (e.conversationId === incomingState.conversationId) staleIds.add(e.messageId);
+			else kept.push(e);
+		}
+		const nextTracker = kept.length === echoesOf(tracker).length ? tracker : { ...tracker, echoes: kept };
+		if (staleIds.size === 0) return { tracker: nextTracker, state: incomingState };
+		return {
+			tracker: nextTracker,
+			state: { ...incomingState, messages: incomingState.messages.filter((m) => !staleIds.has(m.id)) },
+		};
+	}
+
+	const convId = incomingState.conversationId;
+	const keptEchoes: PendingPromptEcho[] = [];
+	const staleEchoIds = new Set<string>();
+	const appendEchoes: UiMessage[] = [];
+
+	for (const echo of echoesOf(tracker)) {
+		if (echo.conversationId !== convId || now - echo.createdAt >= OPTIMISTIC_ECHO_TTL_MS) {
+			// 过期或非本会话：过期项的气泡要移除（不在本帧追加），跨会话项继续跟踪
+			if (echo.conversationId === convId) staleEchoIds.add(echo.messageId);
+			if (echo.conversationId === convId) continue;
+			keptEchoes.push(echo);
+			continue;
+		}
+		const serverMatches = countMatchingUserMessages(incomingState.messages, echo.rawText);
+		if (serverMatches > echo.baselineUserMsgMatches) {
+			// 服务端已落账 → 移除本地气泡，跟踪终止
+			staleEchoIds.add(echo.messageId);
+			continue;
+		}
+		// 未落账 → 保留跟踪；若本地气泡已在列表中（delta 合并场景）原位保留，否则追加到列表尾。
+		// 不查重直接追加会导致 delta 帧上出现重复气泡。
+		keptEchoes.push(echo);
+		if (!incomingState.messages.some((m) => m.id === echo.messageId)) {
+			appendEchoes.push(buildEchoMessage(echo, echo.createdAt));
+		}
+	}
+
+	const nextTracker =
+		keptEchoes.length === echoesOf(tracker).length
+			? tracker
+			: { adds: tracker.adds, removes: tracker.removes, echoes: keptEchoes };
+	if (staleEchoIds.size === 0 && appendEchoes.length === 0) {
+		return { tracker: nextTracker, state: incomingState };
+	}
+
+	const messages = staleEchoIds.size > 0 ? incomingState.messages.filter((m) => !staleEchoIds.has(m.id)) : [...incomingState.messages];
+	const nextState: UiState = {
+		...incomingState,
+		messages: appendEchoes.length > 0 ? [...messages, ...appendEchoes] : messages,
+	};
+	return { tracker: nextTracker, state: nextState };
 }

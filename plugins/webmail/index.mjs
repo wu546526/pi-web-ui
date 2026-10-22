@@ -524,7 +524,7 @@ export default {
 			return withMailbox(folder, async (client) => {
 				// 有废纸篓就移过去（可恢复），没有才硬删
 				let trash = null;
-				for await (const f of client.list()) {
+				for (const f of await client.list()) {
 					if (f.specialUse === "\\Trash" || /^(trash|deleted|deleted messages|已删除)/i.test(f.path)) {
 						trash = f.path;
 						break;
@@ -1025,7 +1025,7 @@ export default {
 							case "folders": {
 								return withMailbox("INBOX", async (client) => {
 									const out = [];
-									for await (const f of client.list()) {
+									for (const f of await client.list()) {
 										out.push(`${f.path}${f.specialUse ? ` (${f.specialUse})` : ""}`);
 									}
 									return out.join("\n");

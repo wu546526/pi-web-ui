@@ -57,7 +57,9 @@ import type {
 import { applyMessageDelta, type MessageDeltaMsg } from "./message-delta";
 import {
 	createOptimisticQueueTracker,
+	reconcileOptimisticPromptEchoes,
 	reconcileOptimisticQueue,
+	recordOptimisticPromptEcho,
 	recordOptimisticQueueAdd,
 	recordOptimisticQueueRemove,
 	rollbackUnconfirmedOptimisticAdds,
@@ -837,6 +839,7 @@ type Action =
 	| { type: "host_metrics"; metrics?: UiHostMetrics; latencyMs?: number | null }
 	| { type: "sandbox_diff"; diff: SandboxDiffView | null }
 	| { type: "optimistic_queue_add"; text: string; attachments?: PromptAttachment[]; queue?: boolean }
+	| { type: "optimistic_prompt_echo"; text: string; attachments?: PromptAttachment[] }
 	| { type: "optimistic_queue_remove"; kind: "steer" | "followUp"; text: string; index?: number };
 
 const MAX_LIVE_OUTPUT = 200_000;
@@ -1065,7 +1068,8 @@ function reducer(state: ChatState, action: Action): ChatState {
 					nextTransition = null;
 				}
 			}
-			const reconciled = reconcileOptimisticQueue(state.optimisticQueue, action.state);
+			const echoReconciled = reconcileOptimisticPromptEchoes(state.optimisticQueue, action.state);
+			const reconciled = reconcileOptimisticQueue(echoReconciled.tracker, echoReconciled.state);
 			return {
 				...state,
 				ready: true,
@@ -1102,7 +1106,8 @@ function reducer(state: ChatState, action: Action): ChatState {
 				...d.state,
 				messages: d.appended.length > 0 ? [...ui.messages, ...d.appended] : ui.messages,
 			};
-			const reconciled = reconcileOptimisticQueue(state.optimisticQueue, rawMerged);
+			const echoReconciled = reconcileOptimisticPromptEchoes(state.optimisticQueue, rawMerged);
+			const reconciled = reconcileOptimisticQueue(echoReconciled.tracker, echoReconciled.state);
 			const merged = reconciled.state;
 			return {
 				...state,
@@ -1138,6 +1143,19 @@ function reducer(state: ChatState, action: Action): ChatState {
 				kind: action.kind,
 				text: action.text,
 				index: action.index,
+			});
+			if (res.tracker === state.optimisticQueue && res.state === state.state) return state;
+			return {
+				...state,
+				optimisticQueue: res.tracker,
+				state: res.state,
+			};
+		}
+		case "optimistic_prompt_echo": {
+			// 空闲态发送的本地回显（recordOptimisticPromptEcho 自带空闲态判定，流式态 no-op）
+			const res = recordOptimisticPromptEcho(state.optimisticQueue, state.state, {
+				text: action.text,
+				attachments: action.attachments,
 			});
 			if (res.tracker === state.optimisticQueue && res.state === state.state) return state;
 			return {
@@ -1963,6 +1981,10 @@ export function useChat() {
 					attachments: msg.attachments,
 					queue: msg.queue,
 				});
+				// 空闲态发送：立即本地回显用户气泡（recordOptimisticPromptEcho 自带空闲态判定，
+				// 流式态 no-op —— 流式插队/排队由上面的 optimistic_queue_add 处理），
+				// 消除「输入框已清空但气泡迟迟不上屏」的真空期。
+				dispatch({ type: "optimistic_prompt_echo", text: msg.text, attachments: msg.attachments });
 			} else if (msg.type === "queue_remove") {
 				dispatch({
 					type: "optimistic_queue_remove",
