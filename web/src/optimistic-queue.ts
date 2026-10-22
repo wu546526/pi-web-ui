@@ -243,14 +243,19 @@ export function recordOptimisticPromptEcho(
 	const echoMessage = buildEchoMessage(entry, now);
 
 	return {
-		tracker: { ...tracker, echoes: [...tracker.echoes, entry] },
+		tracker: { ...tracker, echoes: [...echoesOf(tracker), entry] },
 		state: { ...state, messages: [...state.messages, echoMessage] },
 	};
 }
 
+function echoesOf(tracker: OptimisticQueueTracker): PendingPromptEcho[] {
+	// 兼容旧结构 tracker（可能缺 echoes 字段，如旧单测/持久化状态）
+	return tracker.echoes ?? [];
+}
+
 function nextEchoSeq(tracker: OptimisticQueueTracker): number {
 	let max = 0;
-	for (const e of tracker.echoes) {
+	for (const e of echoesOf(tracker)) {
 		const n = Number.parseInt(e.messageId.slice(OPTIMISTIC_ECHO_ID_PREFIX.length), 10);
 		if (Number.isFinite(n) && n > max) max = n;
 	}
@@ -532,7 +537,7 @@ export function rollbackUnconfirmedOptimisticAdds(
 	if (!state) return { tracker, state };
 	const convId = state.conversationId;
 	const toRollback = tracker.adds.filter((a) => a.conversationId === convId);
-	const echoesToRollback = tracker.echoes.filter((e) => e.conversationId === convId);
+	const echoesToRollback = echoesOf(tracker).filter((e) => e.conversationId === convId);
 	if (toRollback.length === 0 && echoesToRollback.length === 0) return { tracker, state };
 
 	let steering = [...state.queue.steering];
@@ -552,7 +557,7 @@ export function rollbackUnconfirmedOptimisticAdds(
 		tracker: {
 			adds: tracker.adds.filter((a) => a.conversationId !== convId),
 			removes: tracker.removes,
-			echoes: tracker.echoes.filter((e) => e.conversationId !== convId),
+			echoes: echoesOf(tracker).filter((e) => e.conversationId !== convId),
 		},
 		state: {
 			...state,
@@ -573,18 +578,18 @@ export function reconcileOptimisticPromptEchoes(
 	incomingState: UiState,
 	now = Date.now(),
 ): { tracker: OptimisticQueueTracker; state: UiState } {
-	if (tracker.echoes.length === 0) return { tracker, state: incomingState };
+	if (echoesOf(tracker).length === 0) return { tracker, state: incomingState };
 	if (incomingState.isStreaming) {
 		// 流式已启动：服务端快照为权威态。本会话的回显气泡要么已被真实消息取代
 		// （全量快照整体覆盖），要么仍混在增量合并列表里（delta append）—— 统一
 		// 剥离本会话 echo- 气泡，避免幽灵残留；真实消息由快照自身携带。
 		const staleIds = new Set<string>();
 		const kept: PendingPromptEcho[] = [];
-		for (const e of tracker.echoes) {
+		for (const e of echoesOf(tracker)) {
 			if (e.conversationId === incomingState.conversationId) staleIds.add(e.messageId);
 			else kept.push(e);
 		}
-		const nextTracker = kept.length === tracker.echoes.length ? tracker : { ...tracker, echoes: kept };
+		const nextTracker = kept.length === echoesOf(tracker).length ? tracker : { ...tracker, echoes: kept };
 		if (staleIds.size === 0) return { tracker: nextTracker, state: incomingState };
 		return {
 			tracker: nextTracker,
@@ -597,7 +602,7 @@ export function reconcileOptimisticPromptEchoes(
 	const staleEchoIds = new Set<string>();
 	const appendEchoes: UiMessage[] = [];
 
-	for (const echo of tracker.echoes) {
+	for (const echo of echoesOf(tracker)) {
 		if (echo.conversationId !== convId || now - echo.createdAt >= OPTIMISTIC_ECHO_TTL_MS) {
 			// 过期或非本会话：过期项的气泡要移除（不在本帧追加），跨会话项继续跟踪
 			if (echo.conversationId === convId) staleEchoIds.add(echo.messageId);
@@ -617,7 +622,7 @@ export function reconcileOptimisticPromptEchoes(
 	}
 
 	const nextTracker =
-		keptEchoes.length === tracker.echoes.length
+		keptEchoes.length === echoesOf(tracker).length
 			? tracker
 			: { adds: tracker.adds, removes: tracker.removes, echoes: keptEchoes };
 	if (staleEchoIds.size === 0 && appendEchoes.length === 0) {
