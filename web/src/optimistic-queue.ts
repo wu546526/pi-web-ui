@@ -66,10 +66,9 @@ export interface PendingQueueRemove {
 /** 空闲态发送的本地回显气泡（服务端确认前暂存，确认后自动移除跟踪）。 */
 export interface PendingPromptEcho {
 	conversationId: string;
-	/** 规范化后的用户正文（trim 后），与服务端落盘消息的首个 text block 全等比较。 */
+	/** 规范化后的用户正文（trim 后），与服务端落盘消息的首个 text block 全等比较。
+	 *  服务端把附件/图片拆成独立 custom 消息，正文不含侧牌标记，回显气泡同构。 */
 	rawText: string;
-	/** 附件中的图片名（与服务端 formatStreamingPrompt 的 image 侧牌同构渲染）。 */
-	imageNames: string[];
 	/** 本地气泡消息 id（echo- 前缀，与真实服务端 id 空间隔离）。 */
 	messageId: string;
 	/** 发送时刻已落盘消息中同内容用户消息数量（不含回显气泡）。 */
@@ -233,15 +232,10 @@ export function recordOptimisticPromptEcho(
 	}
 
 	const rawText = (opts.text ?? "").trim();
-	const imageNames: string[] = [];
-	for (const att of opts.attachments ?? []) {
-		if (att.imageData) imageNames.push(att.name || "image.png");
-	}
 	const seq = nextEchoSeq(tracker);
 	const entry: PendingPromptEcho = {
 		conversationId: state.conversationId,
-		raText: rawText,
-		imageNames,
+		rawText,
 		messageId: makeEchoId(seq),
 		baselineUserMsgMatches: countMatchingUserMessages(state.messages, rawText),
 		createdAt: now,
@@ -267,13 +261,11 @@ function makeEchoId(seq: number): string {
 	return makeEchoMessageId(seq);
 }
 
-/** 构建与服务端落盘用户消息同构的本地回显气泡（纯文本 + 图片芯片名）。 */
+/** 构建与服务端落盘用户消息同构的本地回显气泡（纯正文文本；附件/图片由服务端拆成独立
+ *  custom 消息，落账后随快照自然出现为附件卡片，回显阶段不预渲染，避免标记泄漏）。 */
 function buildEchoMessage(entry: PendingPromptEcho, createdAt: number): UiMessage {
 	const content: UiContentBlock[] = [];
 	if (entry.rawText) content.push({ type: "text", text: entry.rawText });
-	for (const name of entry.imageNames) {
-		content.push({ type: "text", text: `<attached-image name="${name}" />` });
-	}
 	return {
 		id: entry.messageId,
 		role: "user",
