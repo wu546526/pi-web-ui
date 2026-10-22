@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
 	createOptimisticQueueTracker,
 	formatOptimisticQueuedPrompt,
+	OPTIMISTIC_ECHO_TTL_MS,
+	reconcileOptimisticPromptEchoes,
 	reconcileOptimisticQueue,
+	recordOptimisticPromptEcho,
 	recordOptimisticQueueAdd,
 	recordOptimisticQueueRemove,
 	rollbackUnconfirmedOptimisticAdds,
@@ -294,5 +297,116 @@ describe("前端排队与插队消息乐观更新与快照对账 (optimistic-que
 				goalReviewing: true,
 			}).tracker.adds,
 		).toHaveLength(0);
+	});
+
+	it("空闲态发送立即本地回显用户气泡，快照落账后无缝消解不重复", () => {
+		const tracker0 = createOptimisticQueueTracker();
+		const idleState = makeBaseState({ isStreaming: false, rev: 1 });
+
+		// 1. 空闲态发送 → 真空期立即出现本地气泡
+		const sent = recordOptimisticPromptEcho(tracker0, idleState, { text: "你好", now: 1000 });
+		expect(sent.state).not.toBeNull();
+		expect(sent.state!.messages).toHaveLength(2);
+		const echo = sent.state!.messages[1];
+		expect(echo.id.startsWith("echo-")).toBe(true);
+		expect(echo.role).toBe("user");
+		expect(echo.content).toEqual([{ type: "text", text: "你好" }]);
+		expect(sent.tracker.echoes).toHaveLength(1);
+		expect(sent.tracker.echoes[0].baselineUserMsgMatches).toBe(0);
+
+		// 2. 在途旧快照（消息未落盘）→ 气泡保留不闪退
+		const staleSnap = makeBaseState({ isStreaming: false, rev: 1 });
+		const afterStale = reconcileOptimisticPromptEchoes(sent.tracker, staleSnap, 1100);
+		expect(afterStale.state.messages).toHaveLength(2);
+		expect(afterStale.tracker.echoes).toHaveLength(1);
+
+		// 3. 消息已落盘的快照到达 → echo 被真实消息消解，不重复
+		const landedSnap = makeBaseState({
+			isStreaming: false,
+			rev: 2,
+			messages: [
+				{ id: "u-1", role: "user", content: [{ type: "text", text: "初始问题" }], timestamp: 1000 },
+				{ id: "u-2", role: "user", content: [{ type: "text", text: "你好" }], timestamp: 1100 },
+			],
+		});
+		const afterLanded = reconcileOptimisticPromptEchoes(sent.tracker, landedSnap, 1200);
+		expect(afterLanded.state.messages.map((m) => m.id)).toEqual(["u-1", "u-2"]);
+		expect(afterLanded.tracker.echoes).toHaveLength(0);
+
+		// 4. 服务端拒绝（error/warning 通知）→ 回滚气泡
+		const sent2 = recordOptimisticPromptEcho(
+			createOptimisticQueueTracker(),
+			makeBaseState({ isStreaming: false }),
+			{ text: "会被拒绝的消息", now: 2000 },
+		);
+		const rolled = rollbackUnconfirmedOptimisticAdds(sent2.tracker, sent2.state);
+		expect(rolled.state?.messages).toHaveLength(1);
+		expect(rolled.tracker.echoes).toHaveLength(0);
+
+		// 5. TTL 兜底：超过 OPTIMISTIC_ECHO_TTL_MS 仍未落账 → 气泡移除、跟踪清空
+		const sent3 = recordOptimisticPromptEcho(
+			createOptimisticQueueTracker(),
+			makeBaseState({ isStreaming: false }),
+			{ text: "落账慢的消息", now: 3000 },
+		);
+		const expired = reconcileOptimisticPromptEchoes(
+			sent3.tracker,
+			sent3.state!,
+			3000 + OPTIMISTIC_ECHO_TTL_MS + 1,
+		);
+		expect(expired.state.messages).toHaveLength(1);
+		expect(expired.tracker.echoes).toHaveLength(0);
+	});
+
+	it("基线计数防误消解：先前已有同文本消息时，回显气泡等待新落账的那一条", () => {
+		const stateWithDup = makeBaseState({
+			isStreaming: false,
+			messages: [
+				{ id: "u-1", role: "user", content: [{ type: "text", text: "你好" }], timestamp: 900 },
+			],
+		});
+		const sent = recordOptimisticPromptEcho(createOptimisticQueueTracker(), stateWithDup, { text: "你好", now: 1000 });
+		expect(sent.tracker.echoes[0].baselineUserMsgMatches).toBe(1);
+
+		// 快照仍只有 1 条同文本（旧快照在途）→ 不消解
+		const staleSnap = makeBaseState({
+			isStreaming: false,
+			messages: [
+				{ id: "u-1", role: "user", content: [{ type: "text", text: "你好" }], timestamp: 900 },
+			],
+		});
+		const afterStale = reconcileOptimisticPromptEchoes(sent.tracker, staleSnap, 1100);
+		expect(afterStale.tracker.echoes).toHaveLength(1);
+
+		// 快照有 2 条同文本（新消息落账）→ 消解，只留真实消息
+		const landedSnap = makeBaseState({
+			isStreaming: false,
+			messages: [
+				{ id: "u-1", role: "user", content: [{ type: "text", text: "你好" }], timestamp: 900 },
+				{ id: "u-2", role: "user", content: [{ type: "text", text: "你好" }], timestamp: 1100 },
+			],
+		});
+		const afterLanded = reconcileOptimisticPromptEchoes(sent.tracker, landedSnap, 1200);
+		expect(afterLanded.state.messages.map((m) => m.id)).toEqual(["u-1", "u-2"]);
+		expect(afterLanded.tracker.echoes).toHaveLength(0);
+	});
+
+	it("流式启动的快照会剥离残留回显气泡（防幽灵消息）", () => {
+		const tracker0 = createOptimisticQueueTracker();
+		const idleState = makeBaseState({ isStreaming: false });
+		const sent = recordOptimisticPromptEcho(tracker0, idleState, { text: "触发流式的消息", now: 1000 });
+		expect(sent.state!.messages).toHaveLength(2);
+
+		// 服务端开始流式，快照整体覆盖列表但尚未含新用户消息本体 → 剥离 echo 防幽灵
+		const streamingSnap = makeBaseState({
+			isStreaming: true,
+			rev: 5,
+			messages: [
+				{ id: "u-1", role: "user", content: [{ type: "text", text: "初始问题" }], timestamp: 1000 },
+			],
+		});
+		const after = reconcileOptimisticPromptEchoes(sent.tracker, streamingSnap, 1100);
+		expect(after.state.messages.map((m) => m.id)).toEqual(["u-1"]); // echo 被剥离
+		expect(after.tracker.echoes).toHaveLength(0);
 	});
 });

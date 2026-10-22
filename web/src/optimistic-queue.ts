@@ -344,6 +344,7 @@ export function recordOptimisticQueueAdd(
 		tracker: {
 			adds: [...tracker.adds, addEntry],
 			removes: tracker.removes,
+			echoes: echoesOf(tracker),
 		},
 		state: {
 			...state,
@@ -396,6 +397,7 @@ export function recordOptimisticQueueRemove(
 		tracker: {
 			adds: nextAdds,
 			removes: [...tracker.removes, removeEntry],
+			echoes: echoesOf(tracker),
 		},
 		state: {
 			...state,
