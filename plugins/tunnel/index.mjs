@@ -142,42 +142,80 @@ export default {
 				});
 				toAgent(aid, { t: "ctrl", rid, url, method: opts.method || "GET", body: opts.body });
 			});
-		// 模型三元组跟随：设备 pi 用 pi-web-ui 当前会话模型（自定义网关 provider 时桥接到对应网关）；解析失败返回 null，由面板手动兑底
-		const resolveModelEnv = () => {
+		// ── 模型通道（v1.2 重写）──────────────────────────────────────────────
+		// 旧版两缺陷（20261024 修复）：
+		//   ① 正则扫 client-state.json 全文取「第一个 provider/model」——命中 projectModels 里任意项目条目，并非当前会话模型
+		//   ② 标准 provider 返回 {env:{}} 只传模型 ID——设备端 pi 无凭据直接报 No API key
+		// 新版语义（模型通道 = 为设备任务挑一条可用通道，不再假装「跟随会话」），三级解析：
+		//   ① 请求级 override：POST /device/task 带 model="provider/model[/…]" → 精确解析该 provider
+		//   ② 面板手动 modelEnv（storage 三元组）——明确指定优先于自动挑选
+		//   ③ 自动枚举：models.json providers ∩ provider-keys.json，仅 openai-completions 型
+		//     （设备端 cli.mjs /task 仅对 OPENAI_* 回写设备 models.json）；baseUrl 为
+		//     127.0.0.1/localhost 时换算 lanIp——设备与本机同网段直连，流量不出公网
+		// 返回 { env, model, source, baseUrl }；可解析但语义不匹配时返回 { error }；完全失败返回 null
+		const loadModelProviders = () => {
+			const home = os.homedir();
+			const rd = (p) => {
+				try {
+					return JSON.parse(fs.readFileSync(p, "utf8"));
+				} catch {
+					return {};
+				}
+			};
+			return {
+				providers: rd(path.join(home, ".pi/agent/models.json"))?.providers ?? {},
+				keys: rd(path.join(home, ".pi/agent/provider-keys.json")),
+			};
+		};
+		const providerKey = (keys, prov) => {
+			const kv = keys?.[prov]?.keys?.[0];
+			return typeof kv === "string" ? kv : kv?.apiKey || kv?.value || kv?.key || "";
+		};
+		const devReachableBase = (url) =>
+			!url ? "" : url.replace(/^(https?:\/\/)(127\.0\.0\.1|localhost)((?::\d+)?)/i, (_m, sch, _h, port) => (lanIp ? `${sch}${lanIp}${port}` : url));
+		const buildModelChannel = (providers, keys, prov, pdef, fullModel, source) => {
+			if (!pdef) return { error: `未知 provider：${prov}` };
+			if (pdef.api !== "openai-completions")
+				return { error: `provider ${prov} 为 ${pdef.api} 型——设备端暂仅支持 openai-completions 型注入` };
+			const apiKey = providerKey(keys, prov);
+			if (!apiKey) return { error: `provider ${prov} 在 provider-keys.json 中无可用 key` };
+			const base = devReachableBase(pdef.baseUrl);
+			if (!base) return { error: `provider ${prov} 的 baseUrl 无法换算为设备可达地址（本机无内网 IP？）` };
+			return {
+				env: { OPENAI_BASE_URL: base, OPENAI_API_KEY: apiKey },
+				model: fullModel.split("/").slice(1).join("/") || fullModel, // 剥 provider 前缀 = provider 侧模型 ID
+				source,
+				baseUrl: base,
+			};
+		};
+		const resolveModelEnv = (wantModel = "") => {
 			try {
-				const manual = host.storage.get("modelEnv");
-				if (manual) {
-					const j = JSON.parse(manual);
-					if (j.baseUrl && j.apiKey && j.model)
-						return { env: { OPENAI_BASE_URL: j.baseUrl, OPENAI_API_KEY: j.apiKey }, model: j.model };
+				const { providers, keys } = loadModelProviders();
+				if (wantModel) {
+					const prov = wantModel.split("/")[0];
+					return buildModelChannel(providers, keys, prov, providers[prov], wantModel, "override");
+				}
+				try {
+					const manual = JSON.parse(host.storage.get("modelEnv") || "null");
+					if (manual?.baseUrl && manual?.apiKey && manual?.model)
+						return {
+							env: { OPENAI_BASE_URL: manual.baseUrl, OPENAI_API_KEY: manual.apiKey },
+							model: manual.model,
+							source: "manual",
+							baseUrl: manual.baseUrl,
+						};
+				} catch {}
+				const isLocalBase = (u) => /^(https?:\/\/)(127\.0\.0\.1|localhost)/i.test(u || "");
+				const order = Object.entries(providers).sort((a, b) =>
+					isLocalBase(a[1]?.baseUrl) === isLocalBase(b[1]?.baseUrl) ? 0 : isLocalBase(a[1]?.baseUrl) ? -1 : 1,
+				); // 内网网关型优先：设备流量不出公网
+				for (const [prov, pdef] of order) {
+					if (!pdef?.models?.[0]?.id) continue;
+					const r = buildModelChannel(providers, keys, prov, pdef, `${prov}/${pdef.models[0].id}`, "auto");
+					if (!r.error) return r;
 				}
 			} catch {}
-			try {
-				const home = os.homedir();
-				const dataDir = process.env.PI_WEB_DATA_DIR || path.join(home, ".pi-web");
-				const csPath = path.join(dataDir, "client-state.json");
-				if (!fs.existsSync(csPath)) return null;
-				const cs = JSON.parse(fs.readFileSync(csPath, "utf8"));
-				const m = JSON.stringify(cs).match(/"((?:custom|minimax-cn|ark|deepseek|openai|anthropic)\/[^"\\]+)"/); // 当前会话模型 ID（provider/渠道/型号）
-				if (!m) return null;
-				const full = m[1];
-				const prov = full.split("/")[0];
-				const gwModel = full.split("/").slice(1).join("/"); // 剥 provider 前缀 = 网关侧 ID
-				const keysPath = path.join(home, ".pi/agent/provider-keys.json");
-				if (!fs.existsSync(keysPath)) return { env: {}, model: full };
-				const keys = JSON.parse(fs.readFileSync(keysPath, "utf8"));
-				const kv = keys?.[prov]?.keys?.[0];
-				const apiKey = typeof kv === "string" ? kv : kv?.apiKey || kv?.value || kv?.key || "";
-				if (!apiKey) return null;
-				let base = "";
-				const customGwPort = process.env.PI_TUNNEL_GW_PORT;
-				if (customGwPort) base = lanIp ? `http://${lanIp}:${customGwPort}/v1` : "";
-				else return { env: {}, model: full }; // 标准 provider：设备端需已 pi auth，只传模型 ID
-				if (!base) return null;
-				return { env: { OPENAI_BASE_URL: base, OPENAI_API_KEY: apiKey }, model: gwModel };
-			} catch {
-				return null;
-			}
+			return null;
 		};
 		// C 档 P1：审计环 + 设备能力配置（按 name 持久化，重连不丢授权）
 		const auditRing = [];
@@ -209,6 +247,7 @@ export default {
 				notifyDebounced("info", `网络隧道：出口设备已切换到 ${nm}`);
 			}
 		};
+		const CLI_VER_PUBLISH = "p15"; // 能力版本：server 握手下发最新版，本地旧则自更新（与 assets/cli.mjs CLI_VER 同步）
 		const lanIp = detectLanIp(); // 面板生成常驻命令用（网络变化随插件重载自动更新）
 		const statusSnapshot = () => ({
 			running,
@@ -340,8 +379,14 @@ export default {
 								a.cfgSent = true;
 								toAgent(aid, { t: "config", ...devCfg[a.name] });
 							}
+							// P3a: mesh 桥——设备上线刷新 registry + 积压补发
+							if (meshEnabled() && meshWatcher && a?.name) {
+								const nm = meshAgentName(a.name);
+								meshRegistry(nm, a.name, true);
+								meshScanInbox(nm);
+							}
 							try {
-								ws.send(JSON.stringify({ t: "ver", v: "p7" }));
+								ws.send(JSON.stringify({ t: "ver", v: CLI_VER_PUBLISH }));
 							} catch {} // 握手下发最新 CLI 能力版本（旧版自更新；与 assets/cli.mjs 的 CLI_VER 保持一致）
 							break;
 						}
@@ -395,6 +440,30 @@ export default {
 							}
 							break;
 						}
+						case "msg-res": {
+							// P3a: 设备 mesh 任务结果上行 → 写发起方 inbox（wake 由 pi-messenger watcher 自带）
+							const dn = state.agents.get(aid)?.name || aid;
+							const nm = meshAgentName(dn);
+							const pm = meshPending.get(m.msgId);
+							if (pm) {
+								clearTimeout(pm.timer);
+								meshPending.delete(m.msgId);
+							}
+							const to = String(m.to || pm?.to || "");
+							const text = m.ok ? String(m.text || "").slice(0, 8000) || "（设备端无文本回复）" : `任务失败：${String(m.err || "未知错误").slice(0, 300)}`;
+							if (to) meshDeliver(to, nm, text, m.msgId);
+							auditRing.push({ ts: Date.now(), device: dn, op: "mesh.reply", detail: `${m.msgId} → ${to} | ${text.slice(0, 60)}` });
+							try {
+								const f = meshRegistryFile(nm);
+								if (fs.existsSync(f)) {
+									const j = JSON.parse(fs.readFileSync(f, "utf8"));
+									j.activity = { lastActivityAt: new Date().toISOString() };
+									j.offline = false;
+									fs.writeFileSync(f, JSON.stringify(j, null, 2));
+								}
+							} catch {}
+							break;
+						}
 					}
 				});
 				ws.on("close", () => {
@@ -411,6 +480,8 @@ export default {
 					}
 					ensureActive();
 					notifyDebounced("warning", `网络隧道：设备 ${nm} 已断开`);
+					// P3a: mesh 桥——设备下线标记 registry
+					if (meshEnabled() && meshWatcher) meshRegistry(meshAgentName(nm), nm, false);
 				});
 				ws.on("error", () => {});
 			});
@@ -455,6 +526,228 @@ export default {
 			});
 		});
 
+		// ── P3a: pi_messenger mesh 桥（设计 docs/PHASE3-MESH-DESIGN.md）────────────
+		// 纯文件 mesh：桥替设备 agent 读写 registry/inbox；发起方 wake 由其 pi-messenger watcher 自带，零改造。
+		const MESH_DIR = path.join(os.homedir(), ".pi", "agent", "messenger");
+		const meshPending = new Map(); // msgId -> { to, from, timer }
+		const meshQueue = []; // 待投递消息（设备离线时滞留，上线扫描补发）
+		let meshBusy = false;
+		let meshWatcher = null;
+		function meshEnabled() { return host.storage.get("meshEnabled") === "1"; } // function 声明带提升：hello/离线钩子可在 startTunnel await 让出期触发（const 箭头 TDZ 竞态已两次致 activate failed）
+		const meshAgentName = (devName) =>
+			"Remote" +
+			String(devName || "").replace(/\.local$/i, "").split(/[-_\s]+/).filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join("");
+		const meshRegistryFile = (nm) => path.join(MESH_DIR, "registry", `${nm}.json`);
+		function meshRegistry(nm, devName, online) {
+			try {
+				fs.mkdirSync(path.join(MESH_DIR, "registry"), { recursive: true });
+				const f = meshRegistryFile(nm);
+				if (!online) {
+					if (fs.existsSync(f)) {
+						const j = JSON.parse(fs.readFileSync(f, "utf8"));
+						j.offline = true; // pi-messenger 忽略未知字段，安全
+						fs.writeFileSync(f, JSON.stringify(j, null, 2));
+					}
+					return;
+				}
+				fs.writeFileSync(
+					f,
+					JSON.stringify(
+						{
+							name: nm,
+							pid: process.pid,
+							sessionId: `mesh:${devName}`,
+							cwd: os.homedir(),
+							model: "tunnel",
+							startedAt: new Date().toISOString(),
+							isHuman: false,
+							session: { toolCalls: 0, tokens: 0, filesModified: [] },
+							activity: { lastActivityAt: new Date().toISOString() },
+							device: devName,
+							offline: false,
+						},
+						null,
+						2,
+					),
+				);
+			} catch {}
+		}
+		function meshDeliver(to, fromName, text, replyTo) {
+			// 写发起方（mini 侧 pi 会话）inbox → 其 pi-messenger watcher 自动 wake（零改造）
+			try {
+				const dir = path.join(MESH_DIR, "inbox", to);
+				fs.mkdirSync(dir, { recursive: true });
+				const msg = { id: crypto.randomUUID(), from: fromName, to, text, timestamp: new Date().toISOString(), replyTo: replyTo ?? null };
+				fs.writeFileSync(path.join(dir, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`), JSON.stringify(msg, null, 2));
+				return true;
+			} catch {
+				return false;
+			}
+		}
+		async function meshDrain() {
+			// 串行消费（防多设备/多消息并发冲突）；设备离线则滞留队列等上线扫描
+			// P3b: 按目标路由——消息所在 inbox 目录即目标设备 agent（<nm>/xxx.json），经 registry 反查设备 aid 投递；
+			// p3a 版本错误地投给 activeAgent()（单设备侥幸正确，多设备必投错）
+			if (meshBusy) return;
+			meshBusy = true;
+			try {
+				while (meshQueue.length) {
+					const item = meshQueue.shift();
+					const { file, msg, nm } = item;
+					// registry <nm>.json 里存的 devName（物理设备名）→ state.agents 里找 aid
+					let targetAid = null, devName = null;
+					try {
+						devName = JSON.parse(fs.readFileSync(meshRegistryFile(nm), "utf8")).device || null;
+					} catch {}
+					if (devName) for (const [id, a] of state.agents) if (a?.name === devName) { targetAid = id; break; }
+					if (!targetAid) {
+						meshQueue.unshift(item);
+						break; // 目标设备不在线：滞留等上线补发（meshScanInbox 会重新入队）
+					}
+					const me = resolveModelEnv(); // mesh 任务走三级解析默认路径
+					if (!me || me.error) {
+						meshDeliver(msg.from, nm, `投递失败：模型通道无法解析${me?.error ? "：" + me.error : ""}`, msg.id);
+						try { fs.renameSync(file, file + ".done"); } catch {}
+						continue;
+					}
+					const payload = JSON.stringify({
+						mesh: true,
+						msgId: msg.id,
+						from: msg.from,
+						prompt: String(msg.text ?? ""),
+						tools: "read,grep",
+						env: me.env,
+						model: me.model,
+						timeoutS: 600,
+					});
+					auditRing.push({ ts: Date.now(), device: devName, op: "mesh.deliver", detail: `from=${msg.from} | ${String(msg.text ?? "").slice(0, 60)}` });
+					const d = await deviceCtrl(targetAid, "/task", { method: "POST", body: payload }, 65_000);
+					if (d.status === 200) {
+						try { fs.renameSync(file, file + ".done"); } catch {} // 投递成功即标记（server 重启不重投；结果由 msg-res 异步回）
+						meshPending.set(
+							msg.id,
+							{
+								to: msg.from,
+								from: nm,
+								timer: setTimeout(() => {
+									meshPending.delete(msg.id);
+									meshDeliver(msg.from, nm, "任务超时（10min）——设备端可能仍在执行，结果将被丢弃。", msg.id);
+								}, 600_000),
+							},
+						);
+					} else {
+						meshDeliver(msg.from, nm, `投递失败：设备返回 ${d.status} ${JSON.stringify(d.body ?? {}).slice(0, 200)}`, msg.id);
+						try { fs.renameSync(file, file + ".done"); } catch {}
+					}
+				}
+			} finally {
+				meshBusy = false;
+			}
+		}
+		function meshEnqueueFile(fp, nm) {
+			try {
+				const msg = JSON.parse(fs.readFileSync(fp, "utf8"));
+				if (msg?.to && msg?.from && typeof msg.text === "string") meshQueue.push({ file: fp, msg, nm }); // nm = 目标设备 agent 名（P3b 路由用）
+			} catch {}
+		}
+		function meshScanInbox(nm) {
+			// 上线补发：inbox/<nm>/ 未处理消息按时间序，限最近 5 条，更旧标记跳过并回写发起方
+			try {
+				const dir = path.join(MESH_DIR, "inbox", nm);
+				const files = fs.readdirSync(dir).filter((f) => f.endsWith(".json")).map((f) => path.join(dir, f));
+				files.sort((a, b) => fs.statSync(a).mtimeMs - fs.statSync(b).mtimeMs);
+				for (const old of files.slice(0, -5)) {
+					try {
+						const m = JSON.parse(fs.readFileSync(old, "utf8"));
+						meshDeliver(m.from, nm, "消息过于陈旧（积压超过 5 条），已被跳过：" + String(m.text ?? "").slice(0, 80), m.id);
+						fs.renameSync(old, old + ".done");
+					} catch {}
+				}
+				const fresh = files.slice(-5);
+				for (const f of fresh) meshEnqueueFile(f, nm);
+				if (fresh.length) meshDrain();
+			} catch {}
+		}
+		function startMeshBridge() {
+			if (meshWatcher || !meshEnabled()) return;
+			const inbox = path.join(MESH_DIR, "inbox");
+			try { fs.mkdirSync(inbox, { recursive: true }); } catch {}
+			meshWatcher = fs.watch(inbox, { recursive: true }, (_evt, fname) => {
+				if (!fname) return;
+				const ag = activeAgent();
+				if (!ag) return;
+				const nm = meshAgentName(ag.name);
+				const parts = String(fname).split("/");
+				if (parts[0] !== nm || !parts[1]?.endsWith(".json") || parts[1].endsWith(".done")) return; // 只消费设备 agent 自己的 inbox，防环
+				meshEnqueueFile(path.join(inbox, String(fname)), parts[0]);
+				meshDrain();
+			});
+			const ag = activeAgent();
+			if (ag) {
+				const nm = meshAgentName(ag.name);
+				meshRegistry(nm, ag.name, true);
+				meshScanInbox(nm);
+			}
+			console.log("[tunnel] mesh 桥已启动（pi_messenger 文件桥）");
+		}
+		function stopMeshBridge() {
+			if (meshWatcher) {
+				try { meshWatcher.close(); } catch {}
+				meshWatcher = null;
+			}
+			for (const [, p] of meshPending) clearTimeout(p.timer);
+			meshPending.clear();
+			const ag = activeAgent();
+			if (ag) meshRegistry(meshAgentName(ag.name), ag.name, false);
+			console.log("[tunnel] mesh 桥已停止");
+		}
+		host.route("GET", "/mesh", (_req, res) => {
+			res.setHeader("content-type", "application/json");
+			const ag = activeAgent();
+			res.end(
+				JSON.stringify({
+					enabled: meshEnabled(),
+					agentName: ag ? meshAgentName(ag.name) : null,
+					device: ag?.name || null,
+					queue: meshQueue.length,
+					pending: meshPending.size,
+					running: !!meshWatcher,
+				}),
+			);
+		});
+		host.route("POST", "/mesh", async (req, res) => {
+			const j = await readBodyJson(req);
+			res.setHeader("content-type", "application/json");
+			const on = !!j.enabled;
+			host.storage.set("meshEnabled", on ? "1" : "0");
+			if (on) startMeshBridge();
+			else stopMeshBridge();
+			auditRing.push({ ts: Date.now(), device: "-", op: "mesh.switch", detail: on ? "enabled" : "disabled" });
+			res.end(JSON.stringify({ ok: true, enabled: on }));
+		});
+		// P3b: 设备端 mesh 会话快照（只读）——默认活跃设备，可 ?agent=<设备agent名> 指定
+		host.route("GET", "/mesh/session", async (req, res) => {
+			const u = new URL(req.url, "http://local");
+			let aid = state.activeAgentId;
+			const qn = u.searchParams.get("agent");
+			if (qn) for (const [id, a] of state.agents) if (a?.name === qn) { aid = id; break; }
+			res.setHeader("content-type", "application/json");
+			if (!aid) return res.end(JSON.stringify({ ok: false, error: "设备不在线" }));
+			const d = await deviceCtrl(aid, "/session", { method: "GET" }, 10_000);
+			res.end(JSON.stringify(d.status === 200 ? { ok: true, ...(d.body || {}) } : { ok: false, error: `设备返回 ${d.status}` }));
+		});
+		// P3b: 重置设备端 mesh 会话（删 session.json，下次消息开新会话）
+		host.route("POST", "/mesh/reset", async (req, res) => {
+			const j = await readBodyJson(req);
+			res.setHeader("content-type", "application/json");
+			let aid = state.activeAgentId;
+			if (j.agentName) for (const [id, a] of state.agents) if (a?.name === j.agentName) { aid = id; break; }
+			if (!aid) return res.end(JSON.stringify({ ok: false, error: "设备不在线" }));
+			const d = await deviceCtrl(aid, "/session/reset", { method: "POST", body: "{}" }, 10_000);
+			auditRing.push({ ts: Date.now(), device: state.agents.get(aid)?.name || aid, op: "mesh.sessionReset", detail: JSON.stringify(d.body || {}).slice(0, 120) });
+			res.end(JSON.stringify(d.status === 200 ? { ok: true, ...(d.body || {}) } : { ok: false, error: `设备返回 ${d.status}` }));
+		});
+
 		// ── 服务启停（面板按钮 / POST /start /stop 控制；插件激活时默认启动）────────
 		let running = false;
 		async function startTunnel() {
@@ -463,6 +756,15 @@ export default {
 			const upSocks = await listenSafe(socksSrv, socksPort, "127.0.0.1", `SOCKS:${socksPort}`);
 			running = upWs || upSocks;
 			if (running) notifyDebounced("info", "网络隧道服务已启动");
+			// P3a: mesh 桥的启动移到 hello 钩子（设备上线后注册+补发），此处不依赖块级 meshEnabled
+			if (running) setTimeout(() => {
+				try {
+					if (host.storage.get("meshEnabled") === "1") startMeshBridge();
+				} catch (e) {
+					console.log("[tunnel] mesh 桥启动失败:", e && e.message);
+				}
+			}, 0);
+
 			return running;
 		}
 		function stopTunnel() {
@@ -622,6 +924,19 @@ export default {
 				res.end(JSON.stringify({ ok: true, name: nm, config: next, pending: !a }));
 			}
 		});
+		host.route("POST", "/device/fsread", async (req, res) => {
+			// P3a 收尾：面板读设备文件（白名单内，只读）——KeepAlive 排障用
+			{
+				const j = await readBodyJson(req);
+				const id = String(j.id ?? ""),
+					p = String(j.path || "~");
+				const d = id
+					? await deviceCtrl(id, "/fs/read?path=" + encodeURIComponent(p))
+					: { status: 400, body: { error: "缺少设备 id" } };
+				res.setHeader("content-type", "application/json");
+				res.end(JSON.stringify(d.body));
+			}
+		});
 		host.route("POST", "/device/fs", async (req, res) => {
 			// P4: 面板浏览设备目录（选白名单路径用）
 			{
@@ -665,12 +980,12 @@ export default {
 			{
 				const j = await readBodyJson(req);
 				const id = String(j.id ?? "");
-				const me = resolveModelEnv();
-				if (!me) {
+				const me = resolveModelEnv(String(j.model ?? "").trim()); // 请求级 model override 优先于面板手动/自动
+				if (!me || me.error) {
 					res.setHeader("content-type", "application/json");
 					return res.end(
 						JSON.stringify({
-							error: "模型通道无法解析（未找到当前会话模型或网关 key）——可在面板设置手动配置 modelEnv",
+							error: "模型通道无法解析" + (me?.error ? `：${me.error}` : "") + "——可在面板「网络隧道 → 模型通道」手动指定，或检查 models.json / provider-keys.json",
 						}),
 					);
 				}
@@ -682,7 +997,7 @@ export default {
 					timeoutS: +j.timeoutS || 300,
 				});
 				console.log(
-					`[tunnel] task → ${id} model=${me.model} baseUrl=${me.env.OPENAI_BASE_URL || "-"} promptLen=${payload.length}`,
+					`[tunnel] task → ${id} model=${me.model} src=${me.source} baseUrl=${me.baseUrl || "-"} promptLen=${payload.length}`,
 				);
 				const d = id
 					? await deviceCtrl(id, "/task", { method: "POST", body: payload }, (+j.timeoutS || 300) * 1000 + 30000)
@@ -690,6 +1005,57 @@ export default {
 				res.setHeader("content-type", "application/json");
 				res.end(JSON.stringify(d.body));
 			}
+		});
+		host.route("GET", "/modelenv", (_req, res) => {
+			// v1.2: 模型通道状态（key 只回尾部 4 位，不回全文）
+			res.setHeader("content-type", "application/json");
+			let manual = null;
+			try {
+				const j = JSON.parse(host.storage.get("modelEnv") || "null");
+				if (j?.baseUrl && j?.apiKey && j?.model)
+					manual = { baseUrl: j.baseUrl, model: j.model, keyTail: String(j.apiKey).slice(-4) };
+			} catch {}
+			const { providers, keys } = loadModelProviders();
+			const candidates = Object.entries(providers).map(([prov, pdef]) => ({
+				provider: prov,
+				api: pdef?.api || "-",
+				baseUrl: devReachableBase(pdef?.baseUrl) || pdef?.baseUrl || "",
+				hasKey: !!providerKey(keys, prov),
+				models: (pdef?.models ?? []).slice(0, 8).map((m) => m.id),
+			}));
+			const r = resolveModelEnv();
+			res.end(
+				JSON.stringify({
+					manual,
+					resolved: r && !r.error
+						? { model: r.model, source: r.source, baseUrl: r.baseUrl, keyTail: String(r.env.OPENAI_API_KEY || "").slice(-4) }
+						: null,
+					resolveError: r?.error || null,
+					candidates,
+				}),
+			);
+		});
+		host.route("POST", "/modelenv", async (req, res) => {
+			// v1.2: 手动指定模型通道三元组；{clear:true} 恢复自动挑选
+			const j = await readBodyJson(req);
+			res.setHeader("content-type", "application/json");
+			if (j.clear) {
+				host.storage.set("modelEnv", "");
+				try {
+					host.notify("info", "网络隧道：模型通道已恢复自动挑选");
+				} catch {}
+				return res.end(JSON.stringify({ ok: true, cleared: true }));
+			}
+			const baseUrl = String(j.baseUrl ?? "").trim();
+			const apiKey = String(j.apiKey ?? "").trim();
+			const model = String(j.model ?? "").trim();
+			if (!/^https?:\/\//i.test(baseUrl) || !apiKey || !model)
+				return res.end(JSON.stringify({ ok: false, error: "需要 baseUrl（http/https）、apiKey、model 三项齐全" }));
+			host.storage.set("modelEnv", JSON.stringify({ baseUrl, apiKey, model }));
+			try {
+				host.notify("info", `网络隧道：设备任务模型通道已手动指定 → ${model}`);
+			} catch {}
+			res.end(JSON.stringify({ ok: true }));
 		});
 		const offAudit = host.route("GET", "/audit", (_req, res) => {
 			res.setHeader("content-type", "application/json");

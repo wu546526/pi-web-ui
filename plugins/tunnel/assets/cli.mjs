@@ -16,7 +16,8 @@ const argSrv = process.argv.slice(2).find(a => /^wss?:\/\//.test(a)); // 只认 
 const SERVER = argSrv || '{{SERVER}}';
 const TOKEN  = process.env.PI_TUNNEL_TOKEN || '{{TOKEN}}';
 const sockMap = new Map();
-const CLI_VER = 'p7'; // 能力版本：server 握手下发最新版，本地旧则自更新（拉 /cli 原子替换后重启由 launchd 拉起）
+const ts = () => new Date().toTimeString().slice(0, 8); // 日志时间戳（诊断断线循环时序用）
+const CLI_VER = 'p15'; // 能力版本：server 握手下发最新版，本地旧则自更新（拉 /cli 原子替换后重启由 launchd 拉起）
 const SELF_PATH = process.argv[1] ? path.resolve(process.argv[1]) : ''; // 自更新定位自身文件
 const CFG_FILE = path.join(homedir(), '.pi-tunnel-cli.json');
 let piPath = ''; // pi agent 可执行路径（启动时探测；未装则 /task 提示安装）
@@ -219,7 +220,7 @@ const ctrlSrv = http.createServer((req, res) => {
       let body = '';
       req.on('data', c => { body += c; });
       req.on('end', () => {
-        let prompt = '', tools = 'read,grep,glob', env = {}, timeoutS = 300, model = '';
+        let prompt = '', tools = 'read,grep,glob', env = {}, timeoutS = 300, model = '', mesh = false, msgId = '', from = '';
         try {
           const j = JSON.parse(body || '{}');
           prompt = String(j.prompt ?? '').slice(0, 4000);
@@ -227,6 +228,9 @@ const ctrlSrv = http.createServer((req, res) => {
           env = j.env && typeof j.env === 'object' ? j.env : {};
           timeoutS = Math.min(Math.max(+j.timeoutS || 300, 30), 900);
           model = String(j.model ?? '');
+          mesh = !!j.mesh; // P3a: mesh 桥投递——持久会话（--resume）+ 完成后 WS 上行 msg-res
+          msgId = String(j.msgId ?? '');
+          from = String(j.from ?? '');
         } catch {}
         if (!prompt.trim()) return json(res, 400, { error: 'prompt 为空' });
         if (!/^[a-z_,*+.-]+$/i.test(tools)) return json(res, 400, { error: 'tools 非法' });
@@ -257,7 +261,19 @@ const ctrlSrv = http.createServer((req, res) => {
           } catch (e) { console.log('[task] models.json 写失败:', e.message); }
         }
         taskBusy = true;
-        const args = ['-ne', '-p', prompt, '--mode', 'json', '--no-session', '--tools', tools]; // -ne: 设备执行器裸奵（TUI 扩展集不适用且可能缺依赖致命）
+        // P3a mesh 模式：持久会话——sessionId 存 ~/.pi-tunnel-agent/session.json，有则 --resume 续聊
+        let meshSessionId = '';
+        const sessionFile = path.join(homedir(), '.pi-tunnel-agent', 'session.json');
+        if (mesh) {
+          try { meshSessionId = String(JSON.parse(fs.readFileSync(sessionFile, 'utf8')).sessionId || ''); } catch {}
+        }
+        const args = ['-ne', '-p', prompt, '--mode', 'json', '--tools', tools]; // -ne: 设备执行器裸奵（TUI 扩展集不适用且可能缺依赖致命）
+        if (!mesh) args.push('--no-session'); // mesh 要持久记忆，非 mesh 保持无会话裸执行
+        if (mesh && meshSessionId) {
+          // p12 实锤（pi dist/cli/args.js + main.js）：--resume 无论带不带 -n/-ne 都必走 TUI 会话选择器；
+          // --session <uuid> 走 exact-id 本地匹配直接 open（cwd 恒为 home → local 必中，零交互）
+          args.push('--session', meshSessionId);
+        }
         if (model && spawnEnv.PI_CODING_AGENT_DIR) args.push('--model', 'tunnel/' + model);
         const isJs = piPath.endsWith('.js'); // cli.js 形态用当前 node 直跑（不依赖设备 PATH/shim）
         const cmd = isJs ? process.execPath : piPath;
@@ -270,11 +286,62 @@ const ctrlSrv = http.createServer((req, res) => {
         child.stderr.on('data', d => { errBuf += d; if (errBuf.length > 4e5) errBuf = errBuf.slice(-2e5); });
         const killT = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, timeoutS * 1000);
         let settled = false;
-        const finish = (ok) => { if (settled) return; settled = true; clearTimeout(killT); taskBusy = false; json(res, ok ? 200 : 500, { ok, ms: Date.now() - t0, output: outBuf.slice(-40000), err: errBuf.slice(-500) }); };
+        // P3a: 从 --mode json 流提取最终 assistant 文本（最后一个 message_end 的 assistant text）
+        const extractFinalText = () => {
+          let last = '';
+          for (const line of outBuf.split('\n')) {
+            if (!line.trim().startsWith('{')) continue;
+            try {
+              const e = JSON.parse(line);
+              const msg = e.type === 'message_end' ? e.message : null;
+              if (msg?.role === 'assistant' && Array.isArray(msg.content)) {
+                const t = msg.content.filter(c => c.type === 'text').map(c => c.text || '').join('').trim();
+                if (t) last = t;
+              }
+            } catch {}
+          }
+          return last;
+        };
+        // P3a: 新 mesh 会话跑完后抓 session id（agentDir/sessions 最新 uuid 文件名）持久化，供下次 --resume
+        const persistSessionId = () => {
+          if (meshSessionId) return; // 已是 resume，不重存
+          try {
+            const sDir = path.join(agentDir, 'sessions');
+            const found = [];
+            const walk = d => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else if (/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/.test(e.name)) found.push({ p, m: fs.statSync(p).mtimeMs, id: e.name.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/)[0] }); } };
+            walk(sDir);
+            found.sort((a, b) => b.m - a.m);
+            if (found[0]) { fs.mkdirSync(path.dirname(sessionFile), { recursive: true }); fs.writeFileSync(sessionFile, JSON.stringify({ sessionId: found[0].id, updatedAt: new Date().toISOString() }, null, 2), { mode: 0o600 }); console.log('[task] mesh session 已持久化', found[0].id); }
+          } catch (e) { console.log('[task] session 抓取失败:', e.message); }
+        };
+        const finish = (ok) => {
+          if (settled) return; settled = true; clearTimeout(killT); taskBusy = false;
+          if (mesh && msgId) {
+            // P3a: 结果异步上行（不再依赖 ctrl-resp 长等）——server 桥收 msg-res 后写发起方 inbox
+            const text = ok ? extractFinalText() : '';
+            if (!meshSessionId) persistSessionId();
+            try { if (wsRef?.readyState === 1) wsRef.send(JSON.stringify({ t: 'msg-res', msgId, from, to: from, ok, text, ms: Date.now() - t0, err: ok ? '' : errBuf.slice(-300) })); } catch {}
+          }
+          json(res, ok ? 200 : 500, { ok, ms: Date.now() - t0, output: outBuf.slice(-40000), err: errBuf.slice(-500) });
+        };
         child.on('exit', () => finish(!!outBuf));
         child.on('error', () => finish(false));
       });
       return;
+    }
+    if (u.pathname === '/session' && req.method === 'GET') { // P3b: mesh 会话快照（只读不删）
+      const f = path.join(homedir(), '.pi-tunnel-agent', 'session.json');
+      let snap = { exists: false, sessionId: null, updatedAt: null, size: 0 };
+      try { const st = fs.statSync(f); const j = JSON.parse(fs.readFileSync(f, 'utf8')); snap = { exists: true, sessionId: j.sessionId || null, updatedAt: j.updatedAt || st.mtime.toISOString(), size: st.size }; } catch {}
+      return json(res, 200, { ok: true, session: snap });
+    }
+    if (u.pathname === '/session/reset' && req.method === 'POST') { // P3b: 重置 mesh 会话（删 session.json，下次消息开新会话）
+      const f = path.join(homedir(), '.pi-tunnel-agent', 'session.json');
+      let old = null;
+      try { old = JSON.parse(fs.readFileSync(f, 'utf8')).sessionId || null; } catch {}
+      try { fs.rmSync(f, { force: true }); } catch {}
+      audit('session.reset', old ? `删除 mesh 会话 ${old}` : '无会话');
+      return json(res, 200, { ok: true, removed: old });
     }
     if (u.pathname === '/devices') {
       audit('devices.enum', os.platform());
@@ -308,9 +375,19 @@ function connect() {
   }
   const ws = new WebSocket(url);
   wsRef = ws;
+  // connect 兕底：10s 无 onopen（SYN 黑洞/服务未就绪）→ 强制废弃重来，防重连挂死（20261021 重启后设备消失实战根因）
+  const connectGuard = setTimeout(() => {
+    if (ws.readyState !== 0) return;
+    console.log(`[tunnel ${ts()}] connect 10s 无响应，废弃本次连接重来`);
+    try { ws.close(); } catch {}
+    // 兕底兕底：undici 在 CONNECTING 态调 close() 不触发 onclose（20261024 设备重连链死亡实战根因），
+    // 3s 后仍卡 0 → 退出由 launchd KeepAlive 重拉，进程级重启是唯一可靠复位
+    setTimeout(() => { if (ws.readyState === 0) { console.log(`[tunnel ${ts()}] 废弃未生效，退出由 launchd 重拉`); process.exit(0); } }, 3_000);
+  }, 10_000);
   ws.onopen = () => {
+    clearTimeout(connectGuard);
     reconnectDelay = 5000; // 成功连接后恢复常规重连间隔
-    console.log(`[tunnel] 已连接 ${SERVER} @ ${os.hostname()}（控制API :${ctrlPort}）`);
+    console.log(`[tunnel ${ts()}] 已连接 ${SERVER} @ ${os.hostname()}（控制API :${ctrlPort}）`);
     ws.send(JSON.stringify({ t: 'hello', name: process.env.PI_TUNNEL_NAME || os.hostname(), os: `${os.platform()} ${os.release()} ${os.arch()}`, ctrlPort, ver: CLI_VER }));
     startHeartbeat(ws);
   };
@@ -387,8 +464,9 @@ function connect() {
     }
   };
   ws.onclose = ev => {
+    clearTimeout(connectGuard);
     clearInterval(hbTimer);
-    console.log(`[tunnel] 断开(${ev.code ?? ''}) ${reconnectDelay / 1000}s后重连`);
+    console.log(`[tunnel ${ts()}] 断开(${ev.code ?? ''}) ${reconnectDelay / 1000}s后重连`);
     for (const s of sockMap.values()) s.destroy();
     sockMap.clear();
     setTimeout(connect, reconnectDelay);
@@ -443,7 +521,6 @@ function detectPiSync() {
       } catch {}
     }
     if (!p) p = detectPiSync();
-    piPath = p || '';
     piPath = p || '';
   } catch { piPath = ''; }
   if (piPath) console.log(`[pi] agent 就绪: ${piPath}`);

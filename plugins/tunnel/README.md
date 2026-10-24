@@ -4,6 +4,39 @@
 AI 由此以「设备所在网络」为出口做网络巡检与访问——**零公网暴露、天然穿 NAT**，
 DNS 在出口设备侧解析，测得即该设备所在网络的真实结果。
 
+并可将设备接成**指挥节点**：AI 经控制通道在设备上运行 pi agent（`/device/task`），
+设备 agent 以 `Remote<驼峰主机名>` 身份接入 pi_messenger，任意会话 `send` 直达（mesh 桥）。
+
+## 更新日志
+
+### 1.4.0（2026-10-24）P3b 打磨
+- mesh 投递按目标路由：消息经 inbox 目录（设备 agent 名）→ registry 反查设备 aid（p3a 版本错误地投给 activeAgent，多设备必投错）
+- 设备端会话快照/重置：CLI `/session`（GET，只读）+ `/session/reset`（POST）；server `GET /mesh/session`、`POST /mesh/reset`；面板 Mesh 卡「会话/重置」按钮
+- README 重写至当前能力面；设备 CLI p14
+
+### 1.3.0（2026-10-24）Phase 3a：pi_messenger mesh 桥
+- 设备 agent 接入 pi_messenger：纯文件桥（registry/inbox/离线补发/滞留队列），pi-messenger 零改动
+- 设备端持久会话：`--session <uuid>` 跨消息记忆（`--resume` 必弹 TUI 选择器，实锤弃用）
+- TDZ 竞态根治：`meshEnabled` 改 function 声明（const 箭头被异步钩子在启动让出期触发致 activate failed）
+- 上线补发限 5 条、10min 超时回写、面板 Mesh 卡
+
+### 1.2.0（2026-10-23）Phase 2：模型通道三级解析
+- 修复正则误抓非会话模型 + 标准 OpenAI 兼容 provider 的 key 不注入
+- `resolveModelEnv(model?)`：override → manual（storage.modelEnv）→ auto（会话 models.json + provider-keys.json）
+- 设备端动态 models.json 注入 `providers.tunnel`；面板「模型通道」卡 + `GET/POST/clear /modelenv`
+- 新增 `POST /device/task`：设备端 pi agent 裸执行（-p --mode json），控制通道端到端打通（Phase 1）
+
+### 1.1.1（2026-10-22）
+断线自愈三层修复（实战连环排查）：
+- 服务端 isAlive 心跳单 miss 误杀 → 连续 3 miss（≈90s）宽限
+- ver 握手 p7≠p8 阻塞自更新 → 服务端下发与 CLI 版本号同步改
+- 同名设备「能力相同拒新连接」→ 新连接必胜（twin 接管，双进程互踢收敛）
+- CLI 重连 connect 无响应挂死（SYN 黑洞）→ 10s 兕底废弃重来（已实战验证）
+
+### 1.1.0（2026-10-20）
+- 心跳保活 + 僵尸连接判定强制重连；连接/断开日志带时间戳
+- spawn 替代 execFile（路径含空格）；双 label 卸载与配置热更
+
 ## 工作原理
 
 ```
@@ -48,6 +81,18 @@ tunnel_fetch {url: "http://myip.ipip.net"}          # 查出口设备网络的�
 tunnel_fetch {url: "http://192.168.x.1/", timeout: 5}  # 探测出口设备所在内网的网关
 ```
 
+**设备指挥（控制通道，REST 均带 ?token=PI_WEB_TOKEN）**：
+
+```
+POST /plugins-api/tunnel/device/task  {id, prompt, tools:"read,grep", timeoutS:600}   # 设备端 pi 裸执行
+GET  /plugins-api/tunnel/status        # 设备列表与 aid（id 会话级递增，必须动态取）
+POST /plugins-api/tunnel/device/hw    {id}                                            # 硬件概览
+```
+
+**mesh 桥**（面板开啟后）：`pi_messenger send to=RemoteWDLMacBookPro "…"`——
+设备端 pi 以持久会话应答，回复自动回到发起方 inbox 并 wake 注入会话；
+`GET /mesh/session` 查快照、`POST /mesh/reset` 重置记忆。
+
 ## 安全
 
 - SOCKS5 仅监听 `127.0.0.1`，宿主本机之外的进程不可用
@@ -66,14 +111,6 @@ tunnel_fetch {url: "http://192.168.x.1/", timeout: 5}  # 探测出口设备所�
 
 - 源码结构：`manifest.json` + `index.mjs`（服务端，全内联）+ `client/entry.mjs`（面板）
   + `assets/cli.mjs`（设备侧 CLI 模板，`/cli` 下载时注入令牌与地址）+ `client/sdk/`（SDK 拷贝）
-- 服务端改动后需向宿主发 `plugins_reload`（浏览器刷新只更新面板，不重载服务端）
-
-## 更新日志
-
-### 1.1.0（2026-10-20）
-
-- **连接自愈**：CLI ↔ 服务端 25s 应用层心跳，TCP 半开（笔记本休眠/NAT 空闲超时）约 35s 内自动重连，不再需要手动重启常驻服务
-- **pi agent 探测增强**：launchd 精简 PATH 下按 node 同目录 / 系统 npm prefix / ~/.local/bin / 离线包四重定位
-- **任务通道修复**：pi 子进程改用 spawn（execFile 会丢弃 stdio 选项导致 pi 等待 stdin EOF 挂死）
-- **面板视觉梳理**：设备行版本徽章、离线弱化、配置按钮分组、任务结果徽章化、审计四列对齐
-- **卸载加固**：历史版本 label 与现行 label 双兼容卸载，防双服务并存
+- 服务端改动后需 `cp` 至部署位并 `launchctl kickstart -k gui/501/com.xingshuyin.pi-web-ui` 重启宿主
+  （浏览器刷新只更新面板，不重载服务端）
+- 版本铁律：`index.mjs` 的 `CLI_VER_PUBLISH` 与 `assets/cli.mjs` 的 `CLI_VER` 必须同步改（漏改致 p11/p12 两轮推送卡死）
